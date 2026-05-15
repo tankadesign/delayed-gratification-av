@@ -17,6 +17,7 @@
 	let audioSource = $state<MediaElementAudioSourceNode | null>(null);
 	let bufferLength = $state(0);
 	let dataArray = $state<Uint8Array<ArrayBuffer> | null>(null);
+	let ghostArray = $state<Float32Array | null>(null);
 	let canvasEl = $state<HTMLCanvasElement>();
 	let xDistance = $state(250);
 	let innerWidth = $state(typeof window === 'undefined' ? 393 : window.innerWidth);
@@ -25,6 +26,10 @@
 	const maxCirclesMobile = 35;
 	const maxSpawnPerFrameDesktop = 4;
 	const maxSpawnPerFrameMobile = 2;
+	const lineGhostDecayDesktop = 0.995;
+	const lineGhostDecayMobile = 0.995;
+	const lineGhostYOffset = 5;
+
 	const filterVertexSource = `in vec2 aPosition;
 out vec2 vTextureCoord;
 
@@ -268,9 +273,19 @@ fn mainFragment(
 		onResize();
 		window.addEventListener('resize', onResize);
 
+		const lineGhostLayer = new Container();
+		const leftGhost = new Graphics();
+		const rightGhost = new Graphics();
+		lineGhostLayer.y += lineGhostYOffset;
+		lineGhostLayer.addChild(leftGhost);
+		lineGhostLayer.addChild(rightGhost);
+		lineGhostLayer.blendMode = 'add';
+		rightGhost.scale.x = -1;
+
 		const left = new Graphics();
 		const right = new Graphics();
 		const circles = new Container();
+		container.addChild(lineGhostLayer);
 		container.addChild(circles);
 		container.addChild(left);
 		container.addChild(right);
@@ -333,7 +348,7 @@ fn mainFragment(
 				let spawned = 0;
 				const maxCircles = isMobile ? maxCirclesMobile : maxCirclesDesktop;
 				const spawnBudget = isMobile ? maxSpawnPerFrameMobile : maxSpawnPerFrameDesktop;
-				drawLines(left, right);
+				drawLines(leftGhost, rightGhost, left, right);
 				for (let i = 0; i < bufferLength; i++) {
 					const h = dataArray[i];
 					const pct = h / 255;
@@ -356,26 +371,72 @@ fn mainFragment(
 			}
 		});
 	}
-	function drawLines(left: Graphics, right: Graphics) {
+	function drawLines(leftGhost: Graphics, rightGhost: Graphics, left: Graphics, right: Graphics) {
+		leftGhost.clear();
+		rightGhost.clear();
 		left.clear();
 		right.clear();
+		rightGhost.x = innerWidth;
 		right.x = innerWidth;
 		const hue = currentTrack?.hue ?? 150;
+		const lineGhostDecay = isMobile ? lineGhostDecayMobile : lineGhostDecayDesktop;
 		const barHeight = innerHeight / (store.bars / 2);
 		const barWidth = innerWidth / 1.5;
 		const lineHeight = 1;
 		for (let i = 0; i < bufferLength; i++) {
 			const h = dataArray?.[i] ?? 0;
 			const pct = h / 255;
+			const prevGhost = ghostArray?.[i] ?? 0;
+			const ghostPct = Math.max(pct, prevGhost * lineGhostDecay);
+			if (ghostArray) ghostArray[i] = ghostPct;
 			const vPct = i / bufferLength;
 			const color = `hsl(${Math.round(vPct * hue + hue)}, ${Math.round(vPct * 60 + 40)}%, ${Math.round(vPct * 60 + 25)}%)`;
 			const offsetY = Math.round((barHeight - lineHeight) / 2);
 			let y = Math.round(i * barHeight);
+			const wGhost = barWidth * ghostPct * 0.98;
 			const w = barWidth * pct;
+			leftGhost
+				.moveTo(0, y)
+				.lineTo(wGhost, y)
+				.stroke({
+					width: lineHeight + 6,
+					color,
+					alpha: Math.min(0.18, ghostPct * 0.28),
+					join: 'round'
+				});
+			leftGhost
+				.moveTo(0, y)
+				.lineTo(wGhost, y)
+				.stroke({
+					width: lineHeight + 3,
+					color,
+					alpha: Math.min(0.28, ghostPct * 0.42),
+					join: 'round'
+				});
+			leftGhost.circle(wGhost * 1.1, y, 4).fill({ color, alpha: Math.min(0.2, ghostPct * 0.3) });
 			left.moveTo(0, y).lineTo(w, y).stroke({ width: lineHeight, color });
 			left.circle(w, y, 3).fill({ color, alpha: pct });
 			y += offsetY;
-			right.moveTo(0, y).lineTo(w, y).stroke({ width: lineHeight, color, alpha: pct });
+			rightGhost
+				.moveTo(0, y)
+				.lineTo(wGhost, y)
+				.stroke({
+					width: lineHeight + 6,
+					color,
+					alpha: Math.min(0.18, ghostPct * 0.28),
+					join: 'round'
+				});
+			rightGhost
+				.moveTo(0, y)
+				.lineTo(wGhost, y)
+				.stroke({
+					width: lineHeight + 3,
+					color,
+					alpha: Math.min(0.28, ghostPct * 0.42),
+					join: 'round'
+				});
+			rightGhost.circle(wGhost * 1.1, y, 4).fill({ color, alpha: Math.min(0.2, ghostPct * 0.3) });
+			right.moveTo(0, y).lineTo(w, y).stroke({ width: lineHeight, color });
 			right.circle(w, y, 3).fill({ color, alpha: pct });
 		}
 	}
@@ -449,6 +510,7 @@ fn mainFragment(
 
 				bufferLength = store.analyser.frequencyBinCount;
 				dataArray = new Uint8Array(bufferLength);
+				ghostArray = new Float32Array(bufferLength);
 			}
 		} else {
 			console.log('no music');
