@@ -1,21 +1,21 @@
 <script lang="ts">
-	import { tracks } from '$lib/tracks';
-	import { page } from '$app/stores';
 	import { afterNavigate } from '$app/navigation';
-	import { formatTime } from '$lib/store';
+	import { page } from '$app/state';
+	import { tracks } from '$lib/tracks';
+	import { formatTime } from '$lib/util';
 
-	let isPlaying = false;
-	let audioEl: HTMLAudioElement | null = null;
-	let audioFile = '';
-	let time: number = 0;
-	let duration: number = 0;
+	let isPlaying = $state(false);
+	let audioEl = $state<HTMLAudioElement | null>(null);
+	let audioFile = $state('');
+	let time = $state(0);
+	let duration = $state(0);
 
-	$: timeFormatted = formatTime(time);
-	$: durationFormatted = formatTime(duration);
+	let timeFormatted = $derived(formatTime(time));
+	let durationFormatted = $derived(formatTime(duration));
 
-	$: currentTrackId = $page.params.track;
-	$: currentTrack = tracks.find((t) => t.id === currentTrackId);
-	$: name = currentTrack?.name;
+	let currentTrackId = $derived(page.params.track);
+	let currentTrack = $derived(tracks.find((t) => t.id === currentTrackId));
+	let name = $derived(currentTrack?.name);
 
 	function loadAudio() {
 		duration = audioEl!.duration;
@@ -30,21 +30,21 @@
 	<audio
 		bind:this={audioEl}
 		src={audioFile}
-		on:loadedmetadata={loadAudio}
-		on:timeupdate={() => {
+		onloadedmetadata={loadAudio}
+		ontimeupdate={() => {
 			if (audioEl) {
 				time = audioEl.currentTime;
 			}
 		}}
-		on:playing={() => {
+		onplaying={() => {
 			isPlaying = true;
 		}}
-		on:pause={() => {
+		onpause={() => {
 			isPlaying = false;
 		}}
 		preload="metadata"
 		mediagroup="tracks"
-	/>
+	></audio>
 </div>
 
 <style>

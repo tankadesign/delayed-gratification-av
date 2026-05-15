@@ -1,56 +1,36 @@
 <script lang="ts">
 	import type { Track, TrackAudio } from '$lib/types';
+	import { formatTime } from '$lib/util';
 
+	import { store } from '$lib/store.svelte';
+	import { getDatabase, ref, runTransaction } from 'firebase/database';
 	import { createEventDispatcher, onMount } from 'svelte';
 	import Play from './Play.svelte';
-	import { analyser, audioContext, bars } from '$lib/store';
-	import { getDatabase, ref, runTransaction } from '@firebase/database';
-	import { trackEvent } from '$lib/firebase';
 
-	export let track: Track;
-	export let isPlaying = false;
-	export let isSelected = false;
-
-	let audioEl: HTMLAudioElement | null = null;
-	let audioSource: MediaElementAudioSourceNode | null = null;
-
-	let time: number = 0;
-	let duration: number = 0;
-	let scrubPct = 0;
-	let isScrubbing = false;
-	let trackEl: HTMLElement;
-	let didPlay = false;
-
-	$: timeFormatted = formatTime(Math.max(0, isScrubbing ? (scrubPct / 100) * duration : time));
-	$: durationFormatted = formatTime(duration);
-	$: playheadPct = duration ? (100 * time) / duration : 0;
-
-	function formatTime(seconds: number) {
-		const minutes = Math.floor(seconds / 60);
-		const secs = Math.floor(seconds % 60);
-		return `${minutes}:${secs < 10 ? '0' : ''}${secs}`;
+	interface Props {
+		track: Track;
+		isPlaying?: boolean;
+		isSelected?: boolean;
 	}
 
-	function updatePlayCount(completed = false) {
-		const db = getDatabase();
-		const trackRef = ref(db, `tracks/${track.id}/${completed ? 'completedPlays' : 'plays'}`);
-		runTransaction(trackRef, (plays) => {
-			if (plays) {
-				return plays + 1;
-			} else {
-				return 1;
-			}
-		});
-		if (!completed) {
-			trackEvent(`play-${track.id}`);
-			trackEvent(`play`, { label: track.name });
-		} else {
-			trackEvent(`complete-${track.id}`);
-			trackEvent(`complete`, { label: track.name });
-		}
-	}
+	let { track, isPlaying = $bindable(false), isSelected = false }: Props = $props();
 
-	let audioFile = '';
+	let audioEl = $state<HTMLAudioElement | null>(null);
+	let audioSource = $state<MediaElementAudioSourceNode | null>(null);
+
+	let time = $state(0);
+	let duration = $state(0);
+	let scrubPct = $state(0);
+	let isScrubbing = $state(false);
+	let trackEl = $state<HTMLElement>();
+	let didPlay = $state(false);
+	let audioFile = $state('');
+
+	let timeFormatted = $derived(
+		formatTime(Math.max(0, isScrubbing ? (scrubPct / 100) * duration : time))
+	);
+	let durationFormatted = $derived(formatTime(duration));
+	let playheadPct = $derived(duration ? (100 * time) / duration : 0);
 
 	const dispatch = createEventDispatcher<{ play: TrackAudio; end: void }>();
 
@@ -65,24 +45,43 @@
 		});
 	});
 
+	function updatePlayCount(completed = false) {
+		const db = getDatabase();
+		const trackRef = ref(db, `tracks/${track.id}/${completed ? 'completedPlays' : 'plays'}`);
+		runTransaction(trackRef, (plays) => {
+			if (plays) {
+				return plays + 1;
+			} else {
+				return 1;
+			}
+		});
+		if (!completed) {
+			store.logEvent(`play-${track.id}`);
+			store.logEvent(`play`, { label: track.name });
+		} else {
+			store.logEvent(`complete-${track.id}`);
+			store.logEvent(`complete`, { label: track.name });
+		}
+	}
+
 	function startPlaying() {
 		// start player now
-		if (!$audioContext) {
+		if (!store.audioContext) {
 			const ctx = new (window.AudioContext || window.webkitAudioContext)();
-			audioContext.set(ctx);
-			const a = $audioContext!.createAnalyser();
-			a.fftSize = bars;
+			store.audioContext = ctx;
+			const a = store.audioContext!.createAnalyser();
+			a.fftSize = store.bars;
 			a.smoothingTimeConstant = 0.95;
-			analyser.set(a);
+			store.analyser = a;
 		}
 
-		if (!audioSource && $audioContext && audioEl) {
+		if (!audioSource && store.audioContext && audioEl) {
 			if (
 				!navigator.userAgent.includes('Mobile/15E148 Safari/604.1') &&
 				!navigator.userAgent.includes('iPhone OS 17_0')
 			) {
 				console.log('audioSource created');
-				audioSource = $audioContext.createMediaElementSource(audioEl);
+				audioSource = store.audioContext.createMediaElementSource(audioEl);
 			}
 		}
 		if (audioEl) {
@@ -104,12 +103,12 @@
 
 	function startScrub() {
 		isScrubbing = true;
-		trackEl.removeEventListener('mousemove', onScrub);
-		trackEl.addEventListener('mousemove', onScrub);
+		trackEl?.removeEventListener('mousemove', onScrub);
+		trackEl?.addEventListener('mousemove', onScrub);
 	}
 	function endScrub() {
 		isScrubbing = false;
-		trackEl.removeEventListener('mousemove', onScrub);
+		trackEl?.removeEventListener('mousemove', onScrub);
 	}
 	function onScrub(e: MouseEvent) {
 		if (trackEl) {
@@ -124,7 +123,7 @@
 		if (audioEl) {
 			const t = (scrubPct / 100) * duration;
 			audioEl.currentTime = t;
-			trackEvent(`seek`, { label: track.name, time: Math.round(t) });
+			store.logEvent(`seek`, { label: track.name, time: Math.round(t) });
 		}
 	}
 </script>
@@ -137,7 +136,7 @@
 	class:didPlay
 	class:isScrubbing
 >
-	<button on:click={startPlaying}>
+	<button onclick={startPlaying}>
 		<div class="play-icon">
 			<Play {isPlaying} />
 		</div>
@@ -145,39 +144,39 @@
 		<div class="time">
 			{#if didPlay && isSelected}
 				<span class="current">{timeFormatted}</span>
-				<span class="divider" />
+				<span class="divider"></span>
 			{/if}<span class="duration">{durationFormatted}</span>
 		</div>
 		<audio
 			controls
 			bind:this={audioEl}
 			src={audioFile}
-			on:loadedmetadata={loadAudio}
-			on:timeupdate={() => {
+			onloadedmetadata={loadAudio}
+			ontimeupdate={() => {
 				if (audioEl) {
 					time = audioEl.currentTime;
 				}
 			}}
-			on:playing={() => {
+			onplaying={() => {
 				isPlaying = true;
 			}}
-			on:pause={() => {
+			onpause={() => {
 				isPlaying = false;
 			}}
 			preload="metadata"
-		/>
+		></audio>
 	</button>
-	<!-- svelte-ignore a11y-no-static-element-interactions -->
-	<!-- svelte-ignore a11y-click-events-have-key-events -->
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<!-- svelte-ignore a11y_click_events_have_key_events -->
 	<div
 		bind:this={trackEl}
 		class="scrub"
-		on:click={jumpToPosition}
-		on:mouseenter={startScrub}
-		on:mouseleave={endScrub}
+		onclick={jumpToPosition}
+		onmouseenter={startScrub}
+		onmouseleave={endScrub}
 	>
-		<div class="playhead" style="left: {isScrubbing ? scrubPct : playheadPct}%" />
-		<div class="playfill" style="width: {playheadPct}%" />
+		<div class="playhead" style="left: {isScrubbing ? scrubPct : playheadPct}%"></div>
+		<div class="playfill" style="width: {playheadPct}%"></div>
 	</div>
 </div>
 

@@ -1,22 +1,27 @@
 <script lang="ts">
+	import { firebaseConfig } from '$lib/firebase';
+	import { store } from '$lib/store.svelte';
+	import { getAnalytics } from 'firebase/analytics';
+	import { initializeApp } from 'firebase/app';
 	import { onMount } from 'svelte';
 	import './app.css';
-	import { ga } from '$lib/store';
-	import { initializeApp } from '@firebase/app';
-	import { getAnalytics, logEvent } from '@firebase/analytics';
-	import { firebaseConfig, trackEvent } from '$lib/firebase';
+	interface Props {
+		children?: import('svelte').Snippet;
+	}
+
+	let { children }: Props = $props();
 
 	const app = initializeApp(firebaseConfig);
 
 	onMount(() => {
 		const analytics = getAnalytics(app);
-		ga.set(analytics);
-		trackEvent('page_view');
+		store.ga = analytics;
+		store.logEvent('page_view');
 	});
 </script>
 
 <main>
-	<slot />
+	{@render children?.()}
 </main>
 
 <style>

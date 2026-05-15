@@ -1,25 +1,28 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { page } from '$app/stores';
-	import * as PIXI from 'pixi.js';
-	import { gsap } from 'gsap';
-	import type { Track, TrackAudio } from '$lib/types';
 	import TrackComponent from '$lib/components/Track.svelte';
+	import { store } from '$lib/store.svelte';
 	import { tracks } from '$lib/tracks';
-	import { audioContext, bars, analyser } from '$lib/store';
+	import type { Track, TrackAudio } from '$lib/types';
+	import { gsap } from 'gsap';
+	import * as PIXI from 'pixi.js';
+	import { onMount } from 'svelte';
 
-	export let currentTrack: Track | null = null;
+	interface Props {
+		currentTrack?: Track | null;
+	}
 
-	let music: HTMLAudioElement | null = null;
-	let audioSource: MediaElementAudioSourceNode | null = null;
-	let bufferLength = 0;
-	let dataArray: Uint8Array;
-	let canvasEl: HTMLCanvasElement;
-	let xDistance = 250;
-	let innerWidth = typeof window === 'undefined' ? 393 : window.innerWidth;
-	let innerHeight = typeof window === 'undefined' ? 660 : window.innerHeight;
+	let { currentTrack = $bindable(null) }: Props = $props();
 
-	$: isMobile = innerWidth < 560;
+	let music = $state<HTMLAudioElement | null>(null);
+	let audioSource = $state<MediaElementAudioSourceNode | null>(null);
+	let bufferLength = $state(0);
+	let dataArray = $state<Uint8Array<ArrayBuffer> | null>(null);
+	let canvasEl = $state<HTMLCanvasElement>();
+	let xDistance = $state(250);
+	let innerWidth = $state(typeof window === 'undefined' ? 393 : window.innerWidth);
+	let innerHeight = $state(typeof window === 'undefined' ? 660 : window.innerHeight);
+
+	let isMobile = $derived(innerWidth < 560);
 
 	function getResolution() {
 		const devicePixelRatio = typeof window === 'undefined' ? 2 : window.devicePixelRatio;
@@ -76,8 +79,8 @@
 
 		app.stage.addChild(container);
 		app.ticker.add(() => {
-			if ($analyser && dataArray) {
-				$analyser.getByteFrequencyData(dataArray);
+			if (store.analyser && dataArray) {
+				store.analyser.getByteFrequencyData(dataArray);
 				xDistance = Math.random() < 0.03 ? 1500 : 250;
 				let forceFire = false;
 				let canFire = Math.random() < 0.7;
@@ -115,7 +118,7 @@
 		right.clear();
 		right.x = innerWidth;
 		const hue = currentTrack?.hue ?? 150;
-		const barHeight = innerHeight / (bars / 2);
+		const barHeight = innerHeight / (store.bars / 2);
 		const barWidth = innerWidth / 1.5;
 		const lineHeight = 1;
 		for (let i = 0; i < bufferLength; i++) {
@@ -164,7 +167,7 @@
 		g.x = Math.random() * offsetX - offsetX * 0.5 + width / 2;
 		g.y = window.innerHeight + (Math.random() * 400 - 200);
 		g.alpha = Math.random() * 0.3 + 0.6;
-		g.blendMode = PIXI.BLEND_MODES.ADD;
+		g.blendMode = 'add';
 		//g.filters = Math.random() < 0.2 ? [new PIXI.BlurFilter(Math.random() * 15)] : [];
 		container.addChild(g);
 		gsap.to(g, {
@@ -202,11 +205,11 @@
 			music.play();
 			music.volume = 1;
 
-			if (audioSource && $audioContext && $analyser) {
-				audioSource.connect($analyser);
-				$analyser.connect($audioContext.destination);
+			if (audioSource && store.audioContext && store.analyser) {
+				audioSource.connect(store.analyser);
+				store.analyser.connect(store.audioContext.destination);
 
-				bufferLength = $analyser.frequencyBinCount;
+				bufferLength = store.analyser.frequencyBinCount;
 				dataArray = new Uint8Array(bufferLength);
 			}
 		} else {
@@ -257,7 +260,7 @@
 		{/each}
 	</div>
 </div>
-<canvas bind:this={canvasEl} width="100%" height="100%" />
+<canvas bind:this={canvasEl} width="100%" height="100%"></canvas>
 
 <style>
 	.wrap {
