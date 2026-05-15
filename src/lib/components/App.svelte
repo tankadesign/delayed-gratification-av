@@ -40,13 +40,18 @@
 
 	async function initGraphics() {
 		const app = new Application();
+
+		// Detect Safari and use auto preference (falls back to WebGL) for better compatibility
+		const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+
 		await app.init({
 			background: '#002',
 			antialias: true,
 			resolution: getResolution(),
 			canvas: canvasEl,
 			width: getCanvasSize().width,
-			height: getCanvasSize().height
+			height: getCanvasSize().height,
+			preference: isSafari ? 'webgl' : 'webgpu'
 		});
 		const stageSize = {
 			width: app.screen.width,
