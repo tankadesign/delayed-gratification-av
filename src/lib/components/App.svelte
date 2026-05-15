@@ -14,7 +14,9 @@
 	let { currentTrack = $bindable(null) }: Props = $props();
 
 	let music = $state<HTMLAudioElement | null>(null);
-	let audioSource = $state<MediaElementAudioSourceNode | null>(null);
+	let audioSource = $state<AudioNode | null>(null);
+	let analyserSource = $state<AudioNode | null>(null);
+	let analyserDestinationConnected = $state(false);
 	let bufferLength = $state(0);
 	let dataArray = $state<Uint8Array<ArrayBuffer> | null>(null);
 	let ghostArray = $state<Float32Array | null>(null);
@@ -501,13 +503,25 @@ fn mainFragment(
 
 	function play() {
 		if (music) {
-			music.play();
+			if (store.audioContext?.state === 'suspended') {
+				void store.audioContext.resume();
+			}
+			void music.play();
 			music.volume = 1;
 
-			if (audioSource && store.audioContext && store.analyser) {
-				audioSource.connect(store.analyser);
-				store.analyser.connect(store.audioContext.destination);
-
+			if (store.audioContext && store.analyser) {
+				if (audioSource && analyserSource !== audioSource) {
+					try {
+						audioSource.connect(store.analyser);
+						analyserSource = audioSource;
+					} catch (error) {
+						console.log('audio source connect skipped', error);
+					}
+				}
+				if (!analyserDestinationConnected) {
+					store.analyser.connect(store.audioContext.destination);
+					analyserDestinationConnected = true;
+				}
 				bufferLength = store.analyser.frequencyBinCount;
 				dataArray = new Uint8Array(bufferLength);
 				ghostArray = new Float32Array(bufferLength);

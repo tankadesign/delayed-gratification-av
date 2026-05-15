@@ -16,7 +16,7 @@
 	let { track, isPlaying = $bindable(false), isSelected = false }: Props = $props();
 
 	let audioEl = $state<HTMLAudioElement | null>(null);
-	let audioSource = $state<MediaElementAudioSourceNode | null>(null);
+	let audioSource = $state<AudioNode | null>(null);
 
 	let time = $state(0);
 	let duration = $state(0);
@@ -74,14 +74,26 @@
 			a.smoothingTimeConstant = 0.95;
 			store.analyser = a;
 		}
+		if (store.audioContext?.state === 'suspended') {
+			void store.audioContext.resume();
+		}
 
 		if (!audioSource && store.audioContext && audioEl) {
-			if (
-				!navigator.userAgent.includes('Mobile/15E148 Safari/604.1') &&
-				!navigator.userAgent.includes('iPhone OS 17_0')
-			) {
-				console.log('audioSource created');
+			// iOS Safari can fail MediaElementSource in some versions; stream capture is a fallback.
+			try {
 				audioSource = store.audioContext.createMediaElementSource(audioEl);
+			} catch (error) {
+				const mediaElWithCapture = audioEl as HTMLAudioElement & {
+					captureStream?: () => MediaStream;
+					webkitCaptureStream?: () => MediaStream;
+				};
+				const stream =
+					mediaElWithCapture.captureStream?.() ?? mediaElWithCapture.webkitCaptureStream?.();
+				if (stream?.getAudioTracks().length) {
+					audioSource = store.audioContext.createMediaStreamSource(stream);
+				} else {
+					console.log('could not create audio source for analyser', error);
+				}
 			}
 		}
 		if (audioEl) {
