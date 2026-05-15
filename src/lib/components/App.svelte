@@ -4,15 +4,7 @@
 	import { tracks } from '$lib/tracks';
 	import type { Track, TrackAudio } from '$lib/types';
 	import { gsap } from 'gsap';
-	import {
-		Application,
-		BlurFilter,
-		Container,
-		Graphics,
-		NoiseFilter,
-		RenderTexture,
-		Sprite
-	} from 'pixi.js';
+	import { Application, Container, Graphics, NoiseFilter, RenderTexture, Sprite } from 'pixi.js';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -29,12 +21,17 @@
 	let xDistance = $state(250);
 	let innerWidth = $state(typeof window === 'undefined' ? 393 : window.innerWidth);
 	let innerHeight = $state(typeof window === 'undefined' ? 660 : window.innerHeight);
+	const maxCirclesDesktop = 80;
+	const maxCirclesMobile = 35;
+	const maxSpawnPerFrameDesktop = 4;
+	const maxSpawnPerFrameMobile = 2;
 
 	let isMobile = $derived(innerWidth < 560);
 
 	function getResolution() {
 		const devicePixelRatio = typeof window === 'undefined' ? 2 : window.devicePixelRatio;
-		return Math.min(2, devicePixelRatio);
+		const maxResolution = isMobile ? 1 : 1.25;
+		return Math.min(maxResolution, devicePixelRatio);
 	}
 
 	function getCanvasSize() {
@@ -96,18 +93,23 @@
 		right.scale.x = -1;
 
 		app.stage.addChild(container);
-
-		const noise = new NoiseFilter({ seed: 1354, noise: 0.08 });
-		const blur = new BlurFilter({ strength: 2 });
-		// Apply blur as post-effect to entire layer for better performance
-		circles.filters = [blur, noise];
+		const postFx = new NoiseFilter({
+			noise: isMobile ? 0.03 : 0.05,
+			seed: 0.5
+		});
+		// One lightweight shader pass for the whole circles layer.
+		circles.filters = [postFx];
 
 		app.ticker.add(() => {
+			postFx.seed += 0.003;
 			if (store.analyser && dataArray) {
 				store.analyser.getByteFrequencyData(dataArray);
 				xDistance = Math.random() < 0.03 ? 1500 : 250;
 				let forceFire = false;
 				let canFire = Math.random() < 0.7;
+				let spawned = 0;
+				const maxCircles = isMobile ? maxCirclesMobile : maxCirclesDesktop;
+				const spawnBudget = isMobile ? maxSpawnPerFrameMobile : maxSpawnPerFrameDesktop;
 				drawLines(left, right);
 				for (let i = 0; i < bufferLength; i++) {
 					const h = dataArray[i];
@@ -119,7 +121,12 @@
 					}
 
 					canFire = canFire && pct > 0.6 && Math.random() < 0.6;
-					if (canFire || forceFire) {
+					if (
+						(canFire || forceFire) &&
+						spawned < spawnBudget &&
+						circles.children.length < maxCircles
+					) {
+						spawned += 1;
 						createCircle(pct, stageSize.width, stageSize.height, circles);
 					}
 				}
@@ -186,7 +193,7 @@
 		g.x = Math.random() * offsetX - offsetX * 0.5 + width / 2;
 		g.y = window.innerHeight + (Math.random() * 400 - 200);
 		g.alpha = Math.random() * 0.3 + 0.6;
-		g.blendMode = 'add-npm';
+		g.blendMode = 'add';
 
 		container.addChild(g);
 		gsap.to(g, {
