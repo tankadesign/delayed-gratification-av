@@ -3,12 +3,49 @@
 	import { store } from '$lib/store.svelte';
 	import { tracks } from '$lib/tracks';
 	import type { Track, TrackAudio } from '$lib/types';
-	import { gsap } from 'gsap';
-	import { Application, Container, Filter, Graphics, UniformGroup } from 'pixi.js';
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
+	import {
+		AdditiveBlending,
+		BufferAttribute,
+		BufferGeometry,
+		Fog,
+		Group,
+		Line,
+		LineBasicMaterial,
+		MathUtils,
+		Mesh,
+		MeshBasicMaterial,
+		PerspectiveCamera,
+		Scene,
+		SphereGeometry,
+		WebGLRenderer
+	} from 'three';
+	import { BokehPass } from 'three/examples/jsm/postprocessing/BokehPass.js';
+	import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+	import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 
 	interface Props {
 		currentTrack?: Track | null;
+	}
+
+	interface LineNode {
+		depthT: number;
+		core: Line;
+		ghost: Line;
+		corePosition: Float32Array;
+		ghostPosition: Float32Array;
+		coreMaterial: LineBasicMaterial;
+		ghostMaterial: LineBasicMaterial;
+	}
+
+	interface SphereParticle {
+		mesh: Mesh;
+		material: MeshBasicMaterial;
+		velocityY: number;
+		velocityZ: number;
+		life: number;
+		maxLife: number;
+		active: boolean;
 	}
 
 	let { currentTrack = $bindable(null) }: Props = $props();
@@ -19,503 +56,389 @@
 	let dataArray = $state<Uint8Array<ArrayBuffer> | null>(null);
 	let ghostArray = $state<Float32Array | null>(null);
 	let canvasEl = $state<HTMLCanvasElement>();
-	let xDistance = $state(250);
 	let innerWidth = $state(typeof window === 'undefined' ? 393 : window.innerWidth);
 	let innerHeight = $state(typeof window === 'undefined' ? 660 : window.innerHeight);
-	const maxCirclesDesktop = 80;
-	const maxCirclesMobile = 35;
-	const maxSpawnPerFrameDesktop = 4;
-	const maxSpawnPerFrameMobile = 2;
-	const lineGhostDecayDesktop = 0.995;
-	const lineGhostDecayMobile = 0.995;
-	const lineGhostYOffset = 5;
 
-	const filterVertexSource = `in vec2 aPosition;
-out vec2 vTextureCoord;
+	let renderer: WebGLRenderer | null = null;
+	let scene: Scene | null = null;
+	let camera: PerspectiveCamera | null = null;
+	let composer: EffectComposer | null = null;
+	let bokehPass: BokehPass | null = null;
+	let groundGroup: Group | null = null;
+	let sphereGeometry: SphereGeometry | null = null;
+	let lines: LineNode[] = [];
+	let particles: SphereParticle[] = [];
+	let animationFrameId = 0;
+	let previousFrameTime = 0;
+	let hasConnectedAnalyserOutput = false;
 
-uniform vec4 uInputSize;
-uniform vec4 uOutputFrame;
-uniform vec4 uOutputTexture;
-
-vec4 filterVertexPosition( void )
-{
-		vec2 position = aPosition * uOutputFrame.zw + uOutputFrame.xy;
-
-		position.x = position.x * (2.0 / uOutputTexture.x) - 1.0;
-		position.y = position.y * (2.0*uOutputTexture.z / uOutputTexture.y) - uOutputTexture.z;
-
-		return vec4(position, 0.0, 1.0);
-}
-
-vec2 filterTextureCoord( void )
-{
-		return aPosition * (uOutputFrame.zw * uInputSize.zw);
-}
-
-void main(void)
-{
-		gl_Position = filterVertexPosition();
-		vTextureCoord = filterTextureCoord();
-}`;
-
-	const filterFragmentSource = `in vec2 vTextureCoord;
-out vec4 finalColor;
-
-uniform sampler2D uTexture;
-uniform float uTime;
-uniform float uNoise;
-uniform float uBlur;
-uniform vec2 uTexel;
-uniform vec2 uDirection;
-
-float rand(vec2 co)
-{
-		return fract(sin(dot(co.xy, vec2(12.9898, 78.233))) * 43758.5453);
-}
-
-void main(void)
-{
-		vec2 stepUv = uTexel * uBlur * uDirection;
-
-		// 9-tap 1D Gaussian kernel; run twice (X then Y) for a smoother 2D blur.
-		vec4 color = texture(uTexture, vTextureCoord) * 0.227027;
-		color += texture(uTexture, vTextureCoord + stepUv * 1.0) * 0.1945946;
-		color += texture(uTexture, vTextureCoord - stepUv * 1.0) * 0.1945946;
-		color += texture(uTexture, vTextureCoord + stepUv * 2.0) * 0.1216216;
-		color += texture(uTexture, vTextureCoord - stepUv * 2.0) * 0.1216216;
-		color += texture(uTexture, vTextureCoord + stepUv * 3.0) * 0.054054;
-		color += texture(uTexture, vTextureCoord - stepUv * 3.0) * 0.054054;
-		color += texture(uTexture, vTextureCoord + stepUv * 4.0) * 0.016216;
-		color += texture(uTexture, vTextureCoord - stepUv * 4.0) * 0.016216;
-		float n = (rand(gl_FragCoord.xy * 0.013 + uTime * 0.15) - 0.5) * uNoise;
-
-		if (color.a > 0.0) {
-				color.rgb /= color.a;
-		}
-
-		color.rgb += vec3(n);
-		color.rgb *= color.a;
-		finalColor = color;
-}`;
-
-	const filterWgslSource = `struct GlobalFilterUniforms {
-	uInputSize:vec4<f32>,
-	uInputPixel:vec4<f32>,
-	uInputClamp:vec4<f32>,
-	uOutputFrame:vec4<f32>,
-	uGlobalFrame:vec4<f32>,
-	uOutputTexture:vec4<f32>,
-};
-
-struct EtherealUniforms {
-	uTime:f32,
-	uNoise:f32,
-	uBlur:f32,
-	uTexel:vec2<f32>,
-	uDirection:vec2<f32>,
-};
-
-@group(0) @binding(0) var<uniform> gfu: GlobalFilterUniforms;
-@group(0) @binding(1) var uTexture: texture_2d<f32>;
-@group(0) @binding(2) var uSampler: sampler;
-
-@group(1) @binding(0) var<uniform> fxUniforms: EtherealUniforms;
-
-struct VSOutput {
-	@builtin(position) position: vec4<f32>,
-	@location(0) uv: vec2<f32>
-};
-
-fn filterVertexPosition(aPosition:vec2<f32>) -> vec4<f32>
-{
-	var position = aPosition * gfu.uOutputFrame.zw + gfu.uOutputFrame.xy;
-	position.x = position.x * (2.0 / gfu.uOutputTexture.x) - 1.0;
-	position.y = position.y * (2.0 * gfu.uOutputTexture.z / gfu.uOutputTexture.y) - gfu.uOutputTexture.z;
-	return vec4(position, 0.0, 1.0);
-}
-
-fn filterTextureCoord(aPosition:vec2<f32>) -> vec2<f32>
-{
-	return aPosition * (gfu.uOutputFrame.zw * gfu.uInputSize.zw);
-}
-
-@vertex
-fn mainVertex(@location(0) aPosition: vec2<f32>) -> VSOutput {
-	return VSOutput(filterVertexPosition(aPosition), filterTextureCoord(aPosition));
-}
-
-fn rand(co: vec2<f32>) -> f32 {
-	return fract(sin(dot(co.xy, vec2(12.9898, 78.233))) * 43758.5453);
-}
-
-@fragment
-fn mainFragment(
-	@location(0) uv: vec2<f32>,
-	@builtin(position) position: vec4<f32>
-) -> @location(0) vec4<f32> {
-	let stepUv = fxUniforms.uTexel * fxUniforms.uBlur * fxUniforms.uDirection;
-
-	// 9-tap 1D Gaussian kernel; run twice (X then Y) for a smoother 2D blur.
-	var color = textureSample(uTexture, uSampler, uv) * 0.227027;
-	color += textureSample(uTexture, uSampler, uv + stepUv * 1.0) * 0.1945946;
-	color += textureSample(uTexture, uSampler, uv - stepUv * 1.0) * 0.1945946;
-	color += textureSample(uTexture, uSampler, uv + stepUv * 2.0) * 0.1216216;
-	color += textureSample(uTexture, uSampler, uv - stepUv * 2.0) * 0.1216216;
-	color += textureSample(uTexture, uSampler, uv + stepUv * 3.0) * 0.054054;
-	color += textureSample(uTexture, uSampler, uv - stepUv * 3.0) * 0.054054;
-	color += textureSample(uTexture, uSampler, uv + stepUv * 4.0) * 0.016216;
-	color += textureSample(uTexture, uSampler, uv - stepUv * 4.0) * 0.016216;
-
-	let n = (rand(position.xy * 0.013 + fxUniforms.uTime * 0.15) - 0.5) * fxUniforms.uNoise;
-
-	if (color.a > 0.0) {
-		color.r /= color.a;
-		color.g /= color.a;
-		color.b /= color.a;
-	}
-
-	color.r += n;
-	color.g += n;
-	color.b += n;
-	color.r *= color.a;
-	color.g *= color.a;
-	color.b *= color.a;
-
-	return color;
-}`;
+	const lineGhostDecayDesktop = 0.992;
+	const lineGhostDecayMobile = 0.988;
+	const maxParticlesDesktop = 100;
+	const maxParticlesMobile = 55;
+	const lineCountFallback = store.bars / 2;
 
 	let isMobile = $derived(innerWidth < 560);
 
-	function getResolution() {
-		const devicePixelRatio = typeof window === 'undefined' ? 2 : window.devicePixelRatio;
-		const maxResolution = isMobile ? 1 : 1.25;
-		return Math.min(maxResolution, devicePixelRatio);
+	function getPixelRatio() {
+		const dpr = typeof window === 'undefined' ? 1 : window.devicePixelRatio;
+		return Math.min(isMobile ? 1.1 : 1.4, dpr);
 	}
 
 	function getCanvasSize() {
 		const main = document.querySelector('main');
-		const size = {
-			width: main?.clientWidth ?? window.innerWidth,
-			height: main?.clientHeight ?? window.innerHeight
+		return {
+			width: Math.max(1, Math.round(main?.clientWidth ?? window.innerWidth)),
+			height: Math.max(1, Math.round(main?.clientHeight ?? window.innerHeight))
 		};
-		return size;
 	}
 
-	async function initGraphics() {
-		const app = new Application();
+	function setupGroundLines() {
+		if (!groundGroup) return;
 
-		// Detect Safari and use auto preference (falls back to WebGL) for better compatibility
-		const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+		for (const line of lines) {
+			line.core.geometry.dispose();
+			line.ghost.geometry.dispose();
+			line.coreMaterial.dispose();
+			line.ghostMaterial.dispose();
+		}
+		lines = [];
+		groundGroup.clear();
 
-		await app.init({
-			background: '#002',
-			antialias: true,
-			resolution: getResolution(),
+		const count = Math.max(24, bufferLength || lineCountFallback);
+		if (!ghostArray || ghostArray.length !== count) {
+			ghostArray = new Float32Array(count);
+		}
+
+		for (let i = 0; i < count; i++) {
+			const depthT = count <= 1 ? 0 : i / (count - 1);
+			const z = MathUtils.lerp(6, -90, depthT);
+			const y = MathUtils.lerp(-7.8, 2.6, depthT);
+
+			const corePosition = new Float32Array([-0.1, y, z, 0.1, y, z]);
+			const ghostPosition = new Float32Array([-0.1, y, z, 0.1, y, z]);
+
+			const coreGeometry = new BufferGeometry();
+			coreGeometry.setAttribute('position', new BufferAttribute(corePosition, 3));
+
+			const ghostGeometry = new BufferGeometry();
+			ghostGeometry.setAttribute('position', new BufferAttribute(ghostPosition, 3));
+
+			const coreMaterial = new LineBasicMaterial({
+				color: 0xffffff,
+				transparent: true,
+				opacity: 0.9
+			});
+
+			const ghostMaterial = new LineBasicMaterial({
+				color: 0xffffff,
+				transparent: true,
+				opacity: 0.25,
+				blending: AdditiveBlending,
+				depthWrite: false
+			});
+
+			const ghost = new Line(ghostGeometry, ghostMaterial);
+			const core = new Line(coreGeometry, coreMaterial);
+
+			groundGroup.add(ghost);
+			groundGroup.add(core);
+
+			lines.push({
+				depthT,
+				core,
+				ghost,
+				corePosition,
+				ghostPosition,
+				coreMaterial,
+				ghostMaterial
+			});
+		}
+	}
+
+	function setupSpherePool() {
+		if (!scene) return;
+
+		for (const particle of particles) {
+			scene.remove(particle.mesh);
+			particle.material.dispose();
+		}
+		particles = [];
+
+		sphereGeometry?.dispose();
+		sphereGeometry = new SphereGeometry(isMobile ? 0.34 : 0.5, 18, 12);
+
+		const count = isMobile ? maxParticlesMobile : maxParticlesDesktop;
+		for (let i = 0; i < count; i++) {
+			const material = new MeshBasicMaterial({
+				color: 0xffffff,
+				transparent: true,
+				opacity: 0,
+				blending: AdditiveBlending,
+				depthWrite: false
+			});
+			const mesh = new Mesh(sphereGeometry, material);
+			mesh.visible = false;
+			scene.add(mesh);
+			particles.push({
+				mesh,
+				material,
+				velocityY: 0,
+				velocityZ: 0,
+				life: 0,
+				maxLife: 0,
+				active: false
+			});
+		}
+	}
+
+	function onResize() {
+		if (!renderer || !camera) return;
+		const { width, height } = getCanvasSize();
+		renderer.setPixelRatio(getPixelRatio());
+		renderer.setSize(width, height, false);
+		camera.aspect = width / height;
+		camera.updateProjectionMatrix();
+		composer?.setSize(width, height);
+	}
+
+	function initThree() {
+		if (!canvasEl) return;
+
+		const { width, height } = getCanvasSize();
+		renderer = new WebGLRenderer({
 			canvas: canvasEl,
-			width: getCanvasSize().width,
-			height: getCanvasSize().height,
-			preference: isSafari ? 'webgl' : 'webgpu'
+			antialias: true,
+			alpha: false,
+			powerPreference: 'high-performance'
 		});
-		const stageSize = {
-			width: app.screen.width,
-			height: app.screen.height
-		};
-		const fxUniformsX = new UniformGroup({
-			uTime: { value: 0, type: 'f32' },
-			uNoise: { value: 0, type: 'f32' },
-			uBlur: { value: isMobile ? 1.2 : 1.8, type: 'f32' },
-			uTexel: {
-				value: new Float32Array([
-					1 / Math.max(1, stageSize.width),
-					1 / Math.max(1, stageSize.height)
-				]),
-				type: 'vec2<f32>'
-			},
-			uDirection: {
-				value: new Float32Array([1, 0]),
-				type: 'vec2<f32>'
-			}
-		});
-		const fxUniformsY = new UniformGroup({
-			uTime: { value: 0, type: 'f32' },
-			uNoise: { value: isMobile ? 0.12 : 0.2, type: 'f32' },
-			uBlur: { value: isMobile ? 1.2 : 1.8, type: 'f32' },
-			uTexel: {
-				value: new Float32Array([
-					1 / Math.max(1, stageSize.width),
-					1 / Math.max(1, stageSize.height)
-				]),
-				type: 'vec2<f32>'
-			},
-			uDirection: {
-				value: new Float32Array([0, 1]),
-				type: 'vec2<f32>'
-			}
-		});
-		const onResize = () => {
-			const { width, height } = getCanvasSize();
-			const safeWidth = Math.max(1, Math.round(width));
-			const safeHeight = Math.max(1, Math.round(height));
-			app.renderer.resolution = getResolution();
-			app.renderer.resize(safeWidth, safeHeight);
-			stageSize.width = safeWidth;
-			stageSize.height = safeHeight;
-			const texelX = fxUniformsX.uniforms.uTexel as Float32Array;
-			const texelY = fxUniformsY.uniforms.uTexel as Float32Array;
-			texelX[0] = 1 / safeWidth;
-			texelX[1] = 1 / safeHeight;
-			texelY[0] = texelX[0];
-			texelY[1] = texelX[1];
-		};
+		renderer.setPixelRatio(getPixelRatio());
+		renderer.setSize(width, height, false);
+		renderer.setClearColor('#040612', 1);
 
-		document.body.append(app.canvas as HTMLCanvasElement);
-		const container = new Container();
-		onResize();
+		scene = new Scene();
+		scene.fog = new Fog('#040612', 18, 120);
+
+		camera = new PerspectiveCamera(44, width / height, 0.1, 220);
+		camera.position.set(0, 8.5, 18);
+		camera.lookAt(0, -2, -55);
+
+		groundGroup = new Group();
+		scene.add(groundGroup);
+
+		setupGroundLines();
+		setupSpherePool();
+
+		composer = new EffectComposer(renderer);
+		composer.addPass(new RenderPass(scene, camera));
+		bokehPass = new BokehPass(scene, camera, {
+			focus: isMobile ? 17 : 20,
+			aperture: isMobile ? 0.00012 : 0.0002,
+			maxblur: isMobile ? 0.004 : 0.006
+		});
+		composer.addPass(bokehPass);
+
 		window.addEventListener('resize', onResize);
-
-		const lineGhostLayer = new Container();
-		const leftGhost = new Graphics();
-		const rightGhost = new Graphics();
-		lineGhostLayer.y += lineGhostYOffset;
-		lineGhostLayer.addChild(leftGhost);
-		lineGhostLayer.addChild(rightGhost);
-		lineGhostLayer.blendMode = 'add';
-		rightGhost.scale.x = -1;
-
-		const left = new Graphics();
-		const right = new Graphics();
-		const circles = new Container();
-		container.addChild(lineGhostLayer);
-		container.addChild(circles);
-		container.addChild(left);
-		container.addChild(right);
-		left.blendMode = 'add';
-		right.blendMode = 'add';
-		right.scale.x = -1;
-
-		app.stage.addChild(container);
-		const postFxX = Filter.from({
-			gl: {
-				vertex: filterVertexSource,
-				fragment: filterFragmentSource,
-				name: 'ethereal-post-filter'
-			},
-			gpu: {
-				vertex: {
-					source: filterWgslSource,
-					entryPoint: 'mainVertex'
-				},
-				fragment: {
-					source: filterWgslSource,
-					entryPoint: 'mainFragment'
-				}
-			},
-			resources: {
-				fxUniforms: fxUniformsX
-			}
-		});
-		const postFxY = Filter.from({
-			gl: {
-				vertex: filterVertexSource,
-				fragment: filterFragmentSource,
-				name: 'ethereal-post-filter'
-			},
-			gpu: {
-				vertex: {
-					source: filterWgslSource,
-					entryPoint: 'mainVertex'
-				},
-				fragment: {
-					source: filterWgslSource,
-					entryPoint: 'mainFragment'
-				}
-			},
-			resources: {
-				fxUniforms: fxUniformsY
-			}
-		});
-		// Two-pass separable Gaussian blur; noise on second pass only for subtle texture.
-		circles.filters = [postFxX, postFxY];
-
-		app.ticker.add(() => {
-			fxUniformsX.uniforms.uTime += 0.016;
-			fxUniformsY.uniforms.uTime += 0.016;
-			if (store.analyser && dataArray) {
-				store.analyser.getByteFrequencyData(dataArray);
-				xDistance = Math.random() < 0.03 ? 1500 : 250;
-				let forceFire = false;
-				let canFire = Math.random() < 0.7;
-				let spawned = 0;
-				const maxCircles = isMobile ? maxCirclesMobile : maxCirclesDesktop;
-				const spawnBudget = isMobile ? maxSpawnPerFrameMobile : maxSpawnPerFrameDesktop;
-				drawLines(leftGhost, rightGhost, left, right);
-				for (let i = 0; i < bufferLength; i++) {
-					const h = dataArray[i];
-					const pct = h / 255;
-
-					if (i === Math.round(bufferLength * 0.55) && pct > 0.6) {
-						xDistance = 1500;
-						forceFire = Math.random() < 0.65;
-					}
-
-					canFire = canFire && pct > 0.6 && Math.random() < 0.6;
-					if (
-						(canFire || forceFire) &&
-						spawned < spawnBudget &&
-						circles.children.length < maxCircles
-					) {
-						spawned += 1;
-						createCircle(pct, stageSize.width, stageSize.height, circles);
-					}
-				}
-			}
-		});
 	}
-	function drawLines(leftGhost: Graphics, rightGhost: Graphics, left: Graphics, right: Graphics) {
-		leftGhost.clear();
-		rightGhost.clear();
-		left.clear();
-		right.clear();
-		rightGhost.x = innerWidth;
-		right.x = innerWidth;
-		const hue = currentTrack?.hue ?? 150;
-		const lineGhostDecay = isMobile ? lineGhostDecayMobile : lineGhostDecayDesktop;
-		const barHeight = innerHeight / (store.bars / 2);
-		const barWidth = innerWidth / 1.5;
-		const lineHeight = 1;
-		for (let i = 0; i < bufferLength; i++) {
-			const h = dataArray?.[i] ?? 0;
-			const pct = h / 255;
-			const prevGhost = ghostArray?.[i] ?? 0;
-			const ghostPct = Math.max(pct, prevGhost * lineGhostDecay);
+
+	function activateParticle(intensity: number) {
+		const particle = particles.find((entry) => !entry.active);
+		if (!particle) return;
+
+		const hueBase = currentTrack?.hue ?? 260;
+		const hue = ((hueBase + Math.random() * 90) % 360) / 360;
+		particle.material.color.setHSL(hue, 0.85, 0.62);
+		particle.material.opacity = 0.35 + Math.random() * 0.45;
+
+		particle.mesh.position.set(
+			(Math.random() - 0.5) * (isMobile ? 6 : 10),
+			-8.6 + Math.random() * 1.6,
+			6 + Math.random() * 3
+		);
+		const scale = MathUtils.lerp(0.4, isMobile ? 1.1 : 1.5, Math.random());
+		particle.mesh.scale.setScalar(scale);
+
+		particle.velocityZ = -(9 + Math.random() * (10 + intensity * 12));
+		particle.velocityY = 0.45 + Math.random() * 1.6;
+		particle.life = 0;
+		particle.maxLife = 2.8 + Math.random() * 2;
+		particle.active = true;
+		particle.mesh.visible = true;
+	}
+
+	function updateParticles(delta: number, intensity: number) {
+		let peakSpawn = 0;
+		if (intensity > 0.65 && Math.random() < 0.45) peakSpawn += 1;
+		if (intensity > 0.82 && Math.random() < 0.7) peakSpawn += isMobile ? 1 : 2;
+		if (Math.random() < intensity * 0.08) peakSpawn += 1;
+
+		for (let i = 0; i < peakSpawn; i++) {
+			activateParticle(intensity);
+		}
+
+		for (const particle of particles) {
+			if (!particle.active) continue;
+
+			particle.life += delta;
+			if (particle.life >= particle.maxLife || particle.mesh.position.z < -120) {
+				particle.active = false;
+				particle.mesh.visible = false;
+				continue;
+			}
+
+			particle.mesh.position.z += particle.velocityZ * delta;
+			particle.mesh.position.y += particle.velocityY * delta;
+			particle.mesh.position.x += Math.sin(particle.life * 1.7 + particle.velocityY) * delta * 0.35;
+
+			const lifeT = particle.life / particle.maxLife;
+			particle.material.opacity *= 0.985;
+			particle.material.opacity = Math.max(0, particle.material.opacity * (1 - lifeT * 0.05));
+			particle.mesh.scale.multiplyScalar(1 + delta * 0.07);
+		}
+	}
+
+	function updateGroundLines() {
+		if (!dataArray || !lines.length) return;
+
+		const hueBase = currentTrack?.hue ?? 260;
+		const decay = isMobile ? lineGhostDecayMobile : lineGhostDecayDesktop;
+		const freqStep = Math.max(1, Math.floor(dataArray.length / lines.length));
+
+		for (let i = 0; i < lines.length; i++) {
+			const line = lines[i];
+			const sampleIndex = Math.min(dataArray.length - 1, i * freqStep);
+			const pct = dataArray[sampleIndex] / 255;
+			const previousGhost = ghostArray?.[i] ?? 0;
+			const ghostPct = Math.max(pct, previousGhost * decay);
 			if (ghostArray) ghostArray[i] = ghostPct;
-			const vPct = i / bufferLength;
-			const color = `hsl(${Math.round(vPct * hue + hue)}, ${Math.round(vPct * 60 + 40)}%, ${Math.round(vPct * 60 + 25)}%)`;
-			const offsetY = Math.round((barHeight - lineHeight) / 2);
-			let y = Math.round(i * barHeight);
-			const wGhost = barWidth * ghostPct * 0.98;
-			const w = barWidth * pct;
-			leftGhost
-				.moveTo(0, y)
-				.lineTo(wGhost, y)
-				.stroke({
-					width: lineHeight + 6,
-					color,
-					alpha: Math.min(0.18, ghostPct * 0.28),
-					join: 'round'
-				});
-			leftGhost
-				.moveTo(0, y)
-				.lineTo(wGhost, y)
-				.stroke({
-					width: lineHeight + 3,
-					color,
-					alpha: Math.min(0.28, ghostPct * 0.42),
-					join: 'round'
-				});
-			leftGhost.circle(wGhost * 1.1, y, 4).fill({ color, alpha: Math.min(0.2, ghostPct * 0.3) });
-			left.moveTo(0, y).lineTo(w, y).stroke({ width: lineHeight, color });
-			left.circle(w, y, 3).fill({ color, alpha: pct });
-			y += offsetY;
-			rightGhost
-				.moveTo(0, y)
-				.lineTo(wGhost, y)
-				.stroke({
-					width: lineHeight + 6,
-					color,
-					alpha: Math.min(0.18, ghostPct * 0.28),
-					join: 'round'
-				});
-			rightGhost
-				.moveTo(0, y)
-				.lineTo(wGhost, y)
-				.stroke({
-					width: lineHeight + 3,
-					color,
-					alpha: Math.min(0.28, ghostPct * 0.42),
-					join: 'round'
-				});
-			rightGhost.circle(wGhost * 1.1, y, 4).fill({ color, alpha: Math.min(0.2, ghostPct * 0.3) });
-			right.moveTo(0, y).lineTo(w, y).stroke({ width: lineHeight, color });
-			right.circle(w, y, 3).fill({ color, alpha: pct });
+			const ghostCurve = ghostPct * ghostPct * ghostPct;
+
+			const nearWeight = 1 - line.depthT;
+			const baseHalf = MathUtils.lerp(4.5, 23, nearWeight);
+			const coreHalfWidth = baseHalf * (0.7 + pct * 1.4);
+			const ghostHalfWidth = baseHalf * (0.95 + ghostCurve * 2.2);
+
+			line.corePosition[0] = -coreHalfWidth;
+			line.corePosition[3] = coreHalfWidth;
+			line.ghostPosition[0] = -ghostHalfWidth;
+			line.ghostPosition[3] = ghostHalfWidth;
+
+			const coreAttr = line.core.geometry.getAttribute('position') as BufferAttribute;
+			const ghostAttr = line.ghost.geometry.getAttribute('position') as BufferAttribute;
+			coreAttr.needsUpdate = true;
+			ghostAttr.needsUpdate = true;
+
+			const hue = (((hueBase + line.depthT * 120) % 360) + 360) % 360;
+			const sat = MathUtils.lerp(0.92, 0.52, line.depthT);
+			const lit = MathUtils.lerp(0.68, 0.28, line.depthT);
+			line.coreMaterial.color.setHSL(hue / 360, sat, lit);
+			line.ghostMaterial.color.setHSL(hue / 360, sat, Math.min(0.82, lit + 0.12));
+
+			line.coreMaterial.opacity = MathUtils.lerp(0.95, 0.32, line.depthT) * (0.4 + pct * 0.9);
+			line.ghostMaterial.opacity =
+				MathUtils.lerp(0.36, 0.06, line.depthT) * (0.3 + ghostCurve * 1.7);
 		}
 	}
 
-	function createCircle(pct: number, width: number, height: number, container: Container) {
-		const g = new Graphics();
-		const hue = currentTrack?.hue ?? 150;
-		const color = `hsl(${Math.round(Math.random() * hue * 1.2 + hue)}, ${Math.round((1 - Math.random()) * 60 + 40)}%, ${Math.round(Math.random() * 30 + 20)}%)`;
-		const radius = Math.random() * (isMobile ? 60 : 150) + 5;
+	function animateFrame(now: number) {
+		const delta = previousFrameTime ? Math.min(0.05, (now - previousFrameTime) / 1000) : 0.016;
+		previousFrameTime = now;
 
-		// Draw outer glow ring
-		const glowRadius = radius * 1.4;
-		g.circle(0, 0, glowRadius).fill({ color, alpha: 0.15 });
+		if (store.analyser && dataArray) {
+			store.analyser.getByteFrequencyData(dataArray);
+			updateGroundLines();
 
-		// Draw middle glow ring
-		const midGlowRadius = radius * 1.15;
-		g.circle(0, 0, midGlowRadius).fill({ color, alpha: 0.3 });
-
-		// Draw main circle
-		if (Math.random() < 0.2) {
-			g.circle(0, 0, radius).fill(color);
+			let sum = 0;
+			for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+			const intensity = dataArray.length ? sum / (255 * dataArray.length) : 0;
+			updateParticles(delta, intensity);
 		} else {
-			g.circle(0, 0, radius).stroke({ width: Math.random() * 2 + 1, color });
+			updateParticles(delta, 0);
 		}
 
-		const offsetX = isMobile ? 200 : window.innerWidth * 0.7;
-		g.x = Math.random() * offsetX - offsetX * 0.5 + width / 2;
-		g.y = window.innerHeight + (Math.random() * 400 - 200);
-		g.alpha = Math.random() * 0.3 + 0.6;
-		g.blendMode = 'add';
+		if (composer) {
+			composer.render(delta);
+		} else if (renderer && scene && camera) {
+			renderer.render(scene, camera);
+		}
 
-		container.addChild(g);
-		gsap.to(g, {
-			alpha: 0,
-			duration: 3,
-			x: window.innerWidth / 2,
-			ease: 'quad.in',
-			onComplete: () => {
-				container.removeChild(g);
-			}
-		});
-		gsap.to(g, {
-			alpha: 0,
-			duration: 3,
-			y: g.y + -0.8 * window.innerHeight,
-			ease: 'quart.in'
-		});
-		gsap.from(g.scale, {
-			x: 0.65,
-			y: 0.65,
-			duration: 3,
-			ease: 'expo.out'
-		});
-		return g;
+		animationFrameId = requestAnimationFrame(animateFrame);
+	}
+
+	function cleanupThree() {
+		cancelAnimationFrame(animationFrameId);
+		window.removeEventListener('resize', onResize);
+
+		for (const line of lines) {
+			line.core.geometry.dispose();
+			line.ghost.geometry.dispose();
+			line.coreMaterial.dispose();
+			line.ghostMaterial.dispose();
+		}
+		lines = [];
+
+		for (const particle of particles) {
+			particle.material.dispose();
+		}
+		particles = [];
+
+		sphereGeometry?.dispose();
+		sphereGeometry = null;
+
+		composer?.dispose();
+		composer = null;
+		bokehPass = null;
+
+		scene?.clear();
+		scene = null;
+		camera = null;
+
+		renderer?.dispose();
+		renderer = null;
 	}
 
 	onMount(() => {
-		setTimeout(() => {
-			initGraphics();
-		}, 100);
+		initThree();
+		animationFrameId = requestAnimationFrame(animateFrame);
+	});
+
+	onDestroy(() => {
+		cleanupThree();
 	});
 
 	function play() {
-		if (music) {
-			music.play();
-			music.volume = 1;
-
-			if (audioSource && store.audioContext && store.analyser) {
-				audioSource.connect(store.analyser);
-				store.analyser.connect(store.audioContext.destination);
-
-				bufferLength = store.analyser.frequencyBinCount;
-				dataArray = new Uint8Array(bufferLength);
-				ghostArray = new Float32Array(bufferLength);
-			}
-		} else {
+		if (!music) {
 			console.log('no music');
+			return;
+		}
+
+		music.play();
+		music.volume = 1;
+
+		if (store.audioContext && store.analyser && audioSource) {
+			try {
+				audioSource.connect(store.analyser);
+			} catch (error) {
+				// Ignore duplicate audio graph connections.
+			}
+
+			if (!hasConnectedAnalyserOutput) {
+				store.analyser.connect(store.audioContext.destination);
+				hasConnectedAnalyserOutput = true;
+			}
+
+			const nextBufferLength = store.analyser.frequencyBinCount;
+			const needsRebuild = nextBufferLength !== bufferLength;
+			bufferLength = nextBufferLength;
+			dataArray = new Uint8Array(bufferLength);
+			ghostArray = new Float32Array(bufferLength);
+
+			if (needsRebuild) {
+				setupGroundLines();
+			}
 		}
 	}
+
 	function onPlayTrack(audio: TrackAudio, track: Track) {
 		currentTrack = track;
 		music?.pause();
