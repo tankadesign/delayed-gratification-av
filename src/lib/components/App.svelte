@@ -4,7 +4,15 @@
 	import { tracks } from '$lib/tracks';
 	import type { Track, TrackAudio } from '$lib/types';
 	import { gsap } from 'gsap';
-	import { Application, Container, Graphics, RenderTexture, Sprite } from 'pixi.js';
+	import {
+		Application,
+		BlurFilter,
+		Container,
+		Graphics,
+		NoiseFilter,
+		RenderTexture,
+		Sprite
+	} from 'pixi.js';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -79,11 +87,21 @@
 
 		const left = new Graphics();
 		const right = new Graphics();
+		const circles = new Container();
+		container.addChild(circles);
 		container.addChild(left);
 		container.addChild(right);
+		left.blendMode = 'add';
+		right.blendMode = 'add';
 		right.scale.x = -1;
 
 		app.stage.addChild(container);
+
+		const noise = new NoiseFilter({ seed: 1354, noise: 0.08 });
+		const blur = new BlurFilter({ strength: 2 });
+		// Apply blur as post-effect to entire layer for better performance
+		circles.filters = [blur, noise];
+
 		app.ticker.add(() => {
 			if (store.analyser && dataArray) {
 				store.analyser.getByteFrequencyData(dataArray);
@@ -102,7 +120,7 @@
 
 					canFire = canFire && pct > 0.6 && Math.random() < 0.6;
 					if (canFire || forceFire) {
-						createCircle(pct, stageSize.width, stageSize.height, container);
+						createCircle(pct, stageSize.width, stageSize.height, circles);
 					}
 				}
 			}
@@ -148,17 +166,28 @@
 		const hue = currentTrack?.hue ?? 150;
 		const color = `hsl(${Math.round(Math.random() * hue * 1.2 + hue)}, ${Math.round((1 - Math.random()) * 60 + 40)}%, ${Math.round(Math.random() * 30 + 20)}%)`;
 		const radius = Math.random() * (isMobile ? 60 : 150) + 5;
+
+		// Draw outer glow ring
+		const glowRadius = radius * 1.4;
+		g.circle(0, 0, glowRadius).fill({ color, alpha: 0.15 });
+
+		// Draw middle glow ring
+		const midGlowRadius = radius * 1.15;
+		g.circle(0, 0, midGlowRadius).fill({ color, alpha: 0.3 });
+
+		// Draw main circle
 		if (Math.random() < 0.2) {
 			g.circle(0, 0, radius).fill(color);
 		} else {
 			g.circle(0, 0, radius).stroke({ width: Math.random() * 2 + 1, color });
 		}
+
 		const offsetX = isMobile ? 200 : window.innerWidth * 0.7;
 		g.x = Math.random() * offsetX - offsetX * 0.5 + width / 2;
 		g.y = window.innerHeight + (Math.random() * 400 - 200);
 		g.alpha = Math.random() * 0.3 + 0.6;
-		g.blendMode = 'add';
-		//g.filters = Math.random() < 0.2 ? [new PIXI.BlurFilter(Math.random() * 15)] : [];
+		g.blendMode = 'add-npm';
+
 		container.addChild(g);
 		gsap.to(g, {
 			alpha: 0,
