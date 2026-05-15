@@ -214,7 +214,7 @@
 	}
 
 	function skipToNextTrack() {
-		const index = tracks.findIndex((t) => t === currentTrack);
+		const index = tracks.findIndex((t) => t.id === currentTrack?.id);
 		const next = (index + 1) % tracks.length;
 		const track = document.querySelector('#track-' + tracks[next].id + ' button');
 		if (track) {
@@ -234,7 +234,7 @@
 		{#each tracks as track (track.id)}
 			<TrackComponent
 				{track}
-				isSelected={track === currentTrack}
+				isSelected={track.id === currentTrack?.id}
 				on:play={(e) => {
 					onPlayTrack(e.detail, track);
 				}}
