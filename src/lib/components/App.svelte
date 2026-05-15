@@ -4,7 +4,7 @@
 	import { tracks } from '$lib/tracks';
 	import type { Track, TrackAudio } from '$lib/types';
 	import { gsap } from 'gsap';
-	import * as PIXI from 'pixi.js';
+	import { Application, Container, Graphics, RenderTexture, Sprite } from 'pixi.js';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -38,12 +38,13 @@
 		return size;
 	}
 
-	function initGraphics() {
-		const app = new PIXI.Application({
+	async function initGraphics() {
+		const app = new Application();
+		await app.init({
 			background: '#002',
 			antialias: true,
 			resolution: getResolution(),
-			view: canvasEl,
+			canvas: canvasEl,
 			width: getCanvasSize().width,
 			height: getCanvasSize().height
 		});
@@ -55,24 +56,24 @@
 			const { width, height } = getCanvasSize();
 			stageSize.width = width;
 			stageSize.height = height;
-			app.view.width = width * getResolution();
-			app.view.height = height * getResolution();
+			app.canvas.width = width * getResolution();
+			app.canvas.height = height * getResolution();
 		});
 
-		document.body.append(app.view as HTMLCanvasElement);
-		const container = new PIXI.Container();
-		let renderTexture = PIXI.RenderTexture.create(stageSize);
-		let renderTexture2 = PIXI.RenderTexture.create(stageSize);
+		document.body.append(app.canvas as HTMLCanvasElement);
+		const container = new Container();
+		let renderTexture = RenderTexture.create(stageSize);
+		let renderTexture2 = RenderTexture.create(stageSize);
 		const currentTexture = renderTexture;
 
-		const outputSprite = new PIXI.Sprite(currentTexture);
+		const outputSprite = new Sprite(currentTexture);
 		outputSprite.width = stageSize.width;
 		outputSprite.height = stageSize.height;
 		outputSprite.anchor.set(0.5);
 		app.stage.addChild(outputSprite);
 
-		const left = new PIXI.Graphics();
-		const right = new PIXI.Graphics();
+		const left = new Graphics();
+		const right = new Graphics();
 		container.addChild(left);
 		container.addChild(right);
 		right.scale.x = -1;
@@ -113,7 +114,7 @@
       }) */
 		});
 	}
-	function drawLines(left: PIXI.Graphics, right: PIXI.Graphics) {
+	function drawLines(left: Graphics, right: Graphics) {
 		left.clear();
 		right.clear();
 		right.x = innerWidth;
@@ -125,44 +126,28 @@
 			const h = dataArray?.[i] ?? 0;
 			const pct = h / 255;
 			const vPct = i / bufferLength;
-			const color = { h: vPct * hue + hue, s: vPct * 60 + 40, l: vPct * 60 + 25 };
+			const color = `hsl(${Math.round(vPct * hue + hue)}, ${Math.round(vPct * 60 + 40)}%, ${Math.round(vPct * 60 + 25)}%)`;
 			const offsetY = Math.round((barHeight - lineHeight) / 2);
 			let y = Math.round(i * barHeight);
 			const w = barWidth * pct;
-			left.lineStyle(lineHeight, color);
-			left.moveTo(0, y).lineTo(w, y);
-			left.lineStyle(lineHeight, { ...color, a: pct });
-			left.beginFill({ ...color, a: pct });
-			left.drawCircle(w, y, 3);
-			left.endFill();
+			left.moveTo(0, y).lineTo(w, y).stroke({ width: lineHeight, color });
+			left.circle(w, y, 3).fill({ color, alpha: pct });
 			y += offsetY;
-			right.lineStyle(lineHeight, { ...color, a: pct });
-			right.beginFill({ ...color, a: pct });
-			right.moveTo(0, y).lineTo(w, y);
-			right.drawCircle(w, y, 3);
-			right.endFill();
+			right.moveTo(0, y).lineTo(w, y).stroke({ width: lineHeight, color, alpha: pct });
+			right.circle(w, y, 3).fill({ color, alpha: pct });
 		}
 	}
 
-	function createCircle(pct: number, width: number, height: number, container: PIXI.Container) {
-		const g = new PIXI.Graphics();
+	function createCircle(pct: number, width: number, height: number, container: Container) {
+		const g = new Graphics();
 		const hue = currentTrack?.hue ?? 150;
+		const color = `hsl(${Math.round(Math.random() * hue * 1.2 + hue)}, ${Math.round((1 - Math.random()) * 60 + 40)}%, ${Math.round(Math.random() * 30 + 20)}%)`;
+		const radius = Math.random() * (isMobile ? 60 : 150) + 5;
 		if (Math.random() < 0.2) {
-			g.beginFill(
-				`hsl(${Math.random() * hue * 1.2 + hue}, ${(1 - Math.random()) * 60 + 40}%, ${
-					Math.random() * 30 + 20
-				}%)`
-			);
+			g.circle(0, 0, radius).fill(color);
 		} else {
-			g.lineStyle(
-				Math.random() * 2 + 1,
-				`hsl(${Math.random() * hue * 1.2 + hue}, ${(1 - Math.random()) * 60 + 40}%, ${
-					Math.random() * 30 + 20
-				}%)`
-			);
+			g.circle(0, 0, radius).stroke({ width: Math.random() * 2 + 1, color });
 		}
-		g.drawCircle(0, 0, Math.random() * (isMobile ? 60 : 150) + 5);
-		g.endFill();
 		const offsetX = isMobile ? 200 : window.innerWidth * 0.7;
 		g.x = Math.random() * offsetX - offsetX * 0.5 + width / 2;
 		g.y = window.innerHeight + (Math.random() * 400 - 200);
