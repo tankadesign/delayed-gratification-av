@@ -64,7 +64,7 @@
 		}
 	}
 
-	function startPlaying() {
+	async function startPlaying() {
 		// start player now
 		if (!store.audioContext) {
 			const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -75,7 +75,7 @@
 			store.analyser = a;
 		}
 		if (store.audioContext?.state === 'suspended') {
-			void store.audioContext.resume();
+			await store.audioContext.resume();
 		}
 
 		if (!audioSource && store.audioContext && audioEl) {

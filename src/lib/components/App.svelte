@@ -14,7 +14,7 @@
 	let { currentTrack = $bindable(null) }: Props = $props();
 
 	let music = $state<HTMLAudioElement | null>(null);
-	let audioSource = $state<MediaElementAudioSourceNode | null>(null);
+	let audioSource = $state<AudioNode | null>(null);
 	let activeVisualizer = $state<'2d' | '3d'>('2d');
 	let typedVisualizerCommand = '';
 	let hasConnectedAnalyserOutput = false;
@@ -37,14 +37,11 @@
 		}
 	}
 
-	function play() {
+	async function play() {
 		if (!music) {
 			console.log('no music');
 			return;
 		}
-
-		music.play();
-		music.volume = 1;
 
 		if (store.audioContext && store.analyser && audioSource) {
 			try {
@@ -57,7 +54,14 @@
 				store.analyser.connect(store.audioContext.destination);
 				hasConnectedAnalyserOutput = true;
 			}
+
+			if (store.audioContext.state === 'suspended') {
+				await store.audioContext.resume();
+			}
 		}
+
+		music.volume = 1;
+		await music.play();
 	}
 
 	function onPlayTrack(audio: TrackAudio, track: Track) {
