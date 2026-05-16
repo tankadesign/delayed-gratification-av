@@ -46,10 +46,10 @@
 		spectrumT: number;
 		currentHalfLength: number;
 		currentColor: Color;
+		activity: number;
+		emissionCarry: number;
 		curveOffsets: Float32Array;
 		curveVelocities: Float32Array;
-		rollDirection: number;
-		rollPulseAt: number;
 	}
 
 	interface FloatParticle {
@@ -60,7 +60,10 @@
 		startY: number;
 		startZ: number;
 		driftX: number;
+		kickX: number;
+		kickY: number;
 		driftZ: number;
+		kickZ: number;
 		lift: number;
 		size: number;
 	}
@@ -93,8 +96,12 @@
 	let composer: EffectComposer | null = null;
 	let groundGroup: Group | null = null;
 	let cameraTarget = new Vector3(0, -3.4, -45);
-	let cameraOrigin = $state({ x: -17, y: 1, z: 10.5 });
-	let cameraTargetPosition = $state({ x: -6, y: 0, z: -15 });
+	let cameraOrigin = { x: -17, y: 1, z: 10.5 };
+	let cameraTargetPosition = { x: -6, y: 0, z: -15 };
+	let cameraOrbitX = 0;
+	let cameraOrbitY = 0;
+	let cameraOrbitTargetX = 0;
+	let cameraOrbitTargetY = 0;
 	let particleLayer: Points | null = null;
 	let particleGeometry: BufferGeometry | null = null;
 	let particleMaterial: ShaderMaterial | null = null;
@@ -104,8 +111,9 @@
 	let particleSizes: Float32Array | null = null;
 	let floatParticles: FloatParticle[] = [];
 	let nextParticleIndex = 0;
-	let lastParticleBeatIndex = -1;
-	let lastLineShakeBeatIndex = -1;
+	let lastWaveBeatIndex = -1;
+	let waveBeatBoost = 0;
+	let waveBeatBoostVelocity = 0;
 	let lineTipGeometry: SphereGeometry | null = null;
 	let lines: LineNode[] = [];
 	let animationFrameId = 0;
@@ -116,12 +124,11 @@
 	let smoothedHigh = 0;
 	let smoothedTransient = 0;
 	let scenePulse = 0;
-	let particleMinPerLine = $state(2);
-	let particleMaxPerLine = $state(50);
-	let particleEndpointBias = $state(0.92);
+	let particleMinPerLine = $state(0);
+	let particleMaxPerLine = $state(70);
 	let showParticleTuning = $state(true);
 	let enableBokeh = $state(false);
-	let lineShakeDegrees = $state(4);
+	let waveAmplitude = $state(9);
 
 	const lineGhostDecayDesktop = 0.992;
 	const lineGhostDecayMobile = 0.988;
@@ -129,11 +136,12 @@
 	const lineCountMobile = 26;
 	const maxFloatParticlesDesktop = 18000;
 	const maxFloatParticlesMobile = 6000;
-	const cameraLoopSeconds = 24;
-	const cameraKeyboardStep = 0.25;
-	const lineShakeCascadeSeconds = 0.22;
-	const lineShakeSpring = 68;
-	const lineShakeDamping = 10.5;
+	const particleEmissionRateScale = 0.34;
+	const cameraOrbitMaxRadians = MathUtils.degToRad(30);
+	const waveBeatBoostSpring = 42;
+	const waveBeatBoostDamping = 9;
+	const waveformSpring = 62;
+	const waveformDamping = 11;
 	const lineCurveSegments = 36;
 
 	let isMobile = $derived(innerWidth < 560);
@@ -371,10 +379,10 @@
 				spectrumT,
 				currentHalfLength: 0,
 				currentColor: new Color(0xffffff),
+				activity: 0,
+				emissionCarry: 0,
 				curveOffsets: new Float32Array(lineCurveSegments + 1),
-				curveVelocities: new Float32Array(lineCurveSegments + 1),
-				rollDirection: 1,
-				rollPulseAt: 0
+				curveVelocities: new Float32Array(lineCurveSegments + 1)
 			});
 		}
 	}
@@ -414,7 +422,10 @@
 			startY: 0,
 			startZ: 0,
 			driftX: 0,
+			kickX: 0,
+			kickY: 0,
 			driftZ: 0,
+			kickZ: 0,
 			lift: 0,
 			size: 0
 		}));
@@ -478,82 +489,72 @@
 
 	function updateCameraMotion(now: number, delta: number) {
 		if (!camera) return;
-		const loopT = (now / 1000 / cameraLoopSeconds) * Math.PI * 2;
-		camera.position.set(
-			cameraOrigin.x,
-			cameraOrigin.y + Math.sin(loopT) * (isMobile ? 0.45 : 1.5),
-			cameraOrigin.z
-		);
 		cameraTarget.set(cameraTargetPosition.x, cameraTargetPosition.y, cameraTargetPosition.z);
+		cameraOrbitX = MathUtils.lerp(cameraOrbitX, cameraOrbitTargetX, Math.min(1, delta * 7));
+		cameraOrbitY = MathUtils.lerp(cameraOrbitY, cameraOrbitTargetY, Math.min(1, delta * 7));
+
+		const orbitOffset = new Vector3(
+			cameraOrigin.x - cameraTargetPosition.x,
+			cameraOrigin.y - cameraTargetPosition.y,
+			cameraOrigin.z - cameraTargetPosition.z
+		);
+		orbitOffset.applyAxisAngle(new Vector3(0, 1, 0), cameraOrbitX * cameraOrbitMaxRadians);
+		const pitchAxis = new Vector3().crossVectors(new Vector3(0, 1, 0), orbitOffset).normalize();
+		orbitOffset.applyAxisAngle(pitchAxis, cameraOrbitY * cameraOrbitMaxRadians);
+		camera.position.copy(cameraTarget).add(orbitOffset);
 		camera.lookAt(cameraTarget);
 	}
 
-	function kickLineShake(nowSeconds: number) {
-		const center = (lines.length - 1) * 0.5;
-		const maxDistance = Math.max(1, center);
-		const amount = MathUtils.degToRad(lineShakeDegrees);
-		for (let i = 0; i < lines.length; i++) {
-			const line = lines[i];
-			const distanceT = Math.abs(i - center) / maxDistance;
-			line.rollDirection = Math.random() < 0.5 ? -1 : 1;
-			line.rollPulseAt = nowSeconds + distanceT * lineShakeCascadeSeconds;
-		}
+	function updateCameraOrbit(event: PointerEvent) {
+		if (innerWidth <= 0 || innerHeight <= 0) return;
+		cameraOrbitTargetX = MathUtils.clamp((event.clientX / innerWidth - 0.5) * 2, -1, 1);
+		cameraOrbitTargetY = MathUtils.clamp((event.clientY / innerHeight - 0.5) * 2, -1, 1);
 	}
 
-	function updateLineShake(line: LineNode, delta: number, nowSeconds: number) {
-		if (line.rollPulseAt && nowSeconds >= line.rollPulseAt) {
-			const amount = MathUtils.degToRad(lineShakeDegrees) * Math.max(0.4, line.currentHalfLength);
-			for (let i = 0; i <= lineCurveSegments; i++) {
-				const t = i / lineCurveSegments;
-				const signedX = t * 2 - 1;
-				const endWeight = Math.pow(Math.abs(signedX), 0.7);
-				const ripple = Math.sin(t * Math.PI * 2 + Math.PI * 0.35) * 0.18;
-				line.curveOffsets[i] += line.rollDirection * signedX * amount * 0.25 * endWeight;
-				line.curveVelocities[i] +=
-					line.rollDirection * (signedX + ripple) * amount * MathUtils.lerp(9, 15, endWeight);
-			}
-			line.rollPulseAt = 0;
-		}
+	function kickWaveformBoost() {
+		waveBeatBoostVelocity += 9;
+	}
+
+	function updateWaveformBoost(delta: number) {
+		const acceleration =
+			-waveBeatBoost * waveBeatBoostSpring - waveBeatBoostVelocity * waveBeatBoostDamping;
+		waveBeatBoostVelocity += acceleration * delta;
+		waveBeatBoost += waveBeatBoostVelocity * delta;
+		waveBeatBoost = Math.max(0, waveBeatBoost);
+	}
+
+	function updateLineWaveform(
+		line: LineNode,
+		delta: number,
+		centerIndex: number,
+		bandRadius: number,
+		avgPct: number,
+		peakPct: number,
+		viewportWidthAtLine: number,
+		time: number
+	) {
+		if (!dataArray?.length) return;
+		const maxIndex = dataArray.length - 1;
+		const waveRadius = Math.max(3, bandRadius * 5);
+		const amplitude =
+			viewportWidthAtLine *
+			MathUtils.lerp(0.0015, 0.021, waveAmplitude / 10) *
+			MathUtils.lerp(0.55, 1.7, Math.min(1, peakPct * 1.4)) *
+			(1 + Math.min(2.4, waveBeatBoost));
+
 		for (let i = 0; i <= lineCurveSegments; i++) {
+			const t = i / lineCurveSegments;
+			const index = Math.round(centerIndex + (t - 0.5) * waveRadius * 2);
+			const sample = dataArray[MathUtils.clamp(index, 0, maxIndex)] / 255;
+			const centeredSample = sample - avgPct;
+			const harmonic = Math.sin(t * Math.PI * 4 + time * 0.006 + line.depthT * 8) * peakPct * 0.22;
+			const endFalloff = Math.sin(t * Math.PI);
+			const target = (centeredSample + harmonic) * amplitude * MathUtils.lerp(0.45, 1, endFalloff);
 			const acceleration =
-				-line.curveOffsets[i] * lineShakeSpring - line.curveVelocities[i] * lineShakeDamping;
+				(target - line.curveOffsets[i]) * waveformSpring -
+				line.curveVelocities[i] * waveformDamping;
 			line.curveVelocities[i] += acceleration * delta;
 			line.curveOffsets[i] += line.curveVelocities[i] * delta;
-		}
-	}
-
-	function formatCameraValue(value: number) {
-		return Number(value.toFixed(2));
-	}
-
-	function formatVectorForCode(name: string, vector: { x: number; y: number; z: number }) {
-		return `${name}.set(${formatCameraValue(vector.x)}, ${formatCameraValue(vector.y)}, ${formatCameraValue(vector.z)})`;
-	}
-
-	function moveCameraControl(event: KeyboardEvent) {
-		if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
-		if (event.metaKey || event.ctrlKey) return;
-
-		event.preventDefault();
-		const direction =
-			event.key === 'ArrowLeft' || event.key === 'ArrowDown'
-				? -cameraKeyboardStep
-				: cameraKeyboardStep;
-		const target = event.shiftKey ? cameraTargetPosition : cameraOrigin;
-		const next = { ...target };
-
-		if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
-			next.x = formatCameraValue(next.x + direction);
-		} else if (event.altKey) {
-			next.z = formatCameraValue(next.z + direction);
-		} else {
-			next.y = formatCameraValue(next.y + direction);
-		}
-
-		if (event.shiftKey) {
-			cameraTargetPosition = next;
-		} else {
-			cameraOrigin = next;
 		}
 	}
 
@@ -576,11 +577,11 @@
 		const index = nextParticleIndex;
 		nextParticleIndex = (nextParticleIndex + 1) % floatParticles.length;
 		const tip = side < 0 ? line.tipLeft : line.tipRight;
-		const inwardJitter = Math.pow(Math.random(), MathUtils.lerp(10, 30, particleEndpointBias));
+		const inwardJitter = Math.pow(Math.random(), 22);
 		const spawnPosition = new Vector3(
-			tip.position.x - side * line.currentHalfLength * 0.055 * inwardJitter,
-			tip.position.y + MathUtils.lerp(0.01, 0.08, Math.random()),
-			tip.position.z + MathUtils.lerp(-0.045, 0.045, Math.random())
+			tip.position.x - side * line.currentHalfLength * 0.014 * inwardJitter,
+			tip.position.y + MathUtils.lerp(0.004, 0.025, Math.random()),
+			tip.position.z + MathUtils.lerp(-0.018, 0.018, Math.random())
 		);
 		line.group.localToWorld(spawnPosition);
 		const x = spawnPosition.x;
@@ -593,11 +594,16 @@
 		particle.startX = x;
 		particle.startY = y;
 		particle.startZ = z;
-		const endpointStrength = MathUtils.lerp(0.9, 1, particleEndpointBias);
-		const outwardDrift = side * MathUtils.lerp(1.45, 2.45, endpointStrength);
-		const randomDrift = MathUtils.lerp(-0.14, 0.14, Math.random());
-		particle.driftX = randomDrift + outwardDrift * MathUtils.lerp(0.35, 1, particleEndpointBias);
-		particle.driftZ = MathUtils.lerp(-0.45, 0.2, Math.random());
+		const activityKick = MathUtils.lerp(1, 1.45, line.activity);
+		const domeAzimuth = MathUtils.lerp(-Math.PI * 0.5, Math.PI * 0.5, Math.random());
+		const domeElevation = MathUtils.lerp(-Math.PI * 0.28, Math.PI * 0.42, Math.random());
+		const kickMagnitude = MathUtils.lerp(0.9, 2.1, Math.random()) * activityKick;
+		particle.kickX = side * Math.cos(domeAzimuth) * Math.cos(domeElevation) * kickMagnitude;
+		particle.kickY = Math.sin(domeElevation) * kickMagnitude;
+		particle.kickZ = Math.sin(domeAzimuth) * Math.cos(domeElevation) * kickMagnitude;
+		particle.driftX =
+			side * MathUtils.lerp(0.28, 0.72, Math.random()) + MathUtils.lerp(-0.08, 0.08, Math.random());
+		particle.driftZ = MathUtils.lerp(-0.26, 0.12, Math.random());
 		particle.lift = MathUtils.lerp(0.8, 2.8, Math.random()) * MathUtils.lerp(1, 8, line.depthT);
 		particle.size = MathUtils.lerp(isMobile ? 1.8 : 2.2, isMobile ? 4.4 : 5.8, Math.random());
 
@@ -612,26 +618,33 @@
 		particleSizes[index] = particle.size;
 	}
 
-	function emitLineParticles() {
-		if (!lines.length || !currentTrack?.bpm || !music || music.paused) return;
+	function updateBeatBoost() {
+		if (!currentTrack?.bpm || !music || music.paused) return;
 		const beatSeconds = 60 / currentTrack.bpm;
 		const beatIndex = Math.floor(music.currentTime / beatSeconds);
-		if (beatIndex !== lastLineShakeBeatIndex) {
-			lastLineShakeBeatIndex = beatIndex;
-			kickLineShake(music.currentTime);
+		if (beatIndex !== lastWaveBeatIndex) {
+			lastWaveBeatIndex = beatIndex;
+			kickWaveformBoost();
 		}
-		if (beatIndex === lastParticleBeatIndex) return;
-		lastParticleBeatIndex = beatIndex;
+	}
 
-		const minCount = Math.max(0, Math.floor(Math.min(particleMinPerLine, particleMaxPerLine)));
-		const maxCount = Math.max(
-			minCount,
-			Math.floor(Math.max(particleMinPerLine, particleMaxPerLine))
-		);
+	function emitLineParticles(delta: number) {
+		if (!lines.length || !music || music.paused) return;
 
+		const minRate = Math.max(0, Math.min(particleMinPerLine, particleMaxPerLine));
+		const maxRate = Math.max(minRate, Math.max(particleMinPerLine, particleMaxPerLine));
 		for (const line of lines) {
 			if (line.currentHalfLength <= 0.001) continue;
-			const count = MathUtils.randInt(minCount, maxCount);
+			const activityBurst = Math.pow(MathUtils.clamp(line.activity, 0, 1), 2.2);
+			const ratePerSecond =
+				MathUtils.lerp(minRate, maxRate, activityBurst) * particleEmissionRateScale;
+			line.emissionCarry += ratePerSecond * delta;
+			if (Math.random() < activityBurst * delta * 5.5) {
+				line.emissionCarry += MathUtils.lerp(1, 5, activityBurst);
+			}
+
+			const count = Math.min(12, Math.floor(line.emissionCarry));
+			line.emissionCarry -= count;
 			for (let i = 0; i < count; i++) {
 				activateFloatParticle(line, endpointSide());
 			}
@@ -664,13 +677,17 @@
 			const lifeT = particle.life / particle.maxLife;
 			const cubicLift = lifeT * lifeT * lifeT;
 			const driftEase = 1 - Math.pow(1 - lifeT, 3);
-			const fadeIn = Math.min(1, lifeT / 0.08);
+			const kickEase = 1 - Math.exp(-lifeT * 16);
+			const kickDampen = Math.exp(-lifeT * 12);
 			const fadeOut = lifeT < 0.72 ? 1 : 1 - (lifeT - 0.72) / 0.28;
 
-			particlePositions[offset3] = particle.startX + particle.driftX * driftEase;
-			particlePositions[offset3 + 1] = particle.startY + particle.lift * cubicLift;
-			particlePositions[offset3 + 2] = particle.startZ + particle.driftZ * driftEase;
-			particleAlphas[i] = Math.max(0, fadeOut) * fadeIn * 0.38;
+			particlePositions[offset3] =
+				particle.startX + particle.kickX * kickEase * kickDampen + particle.driftX * driftEase;
+			particlePositions[offset3 + 1] =
+				particle.startY + particle.kickY * kickEase * kickDampen + particle.lift * cubicLift;
+			particlePositions[offset3 + 2] =
+				particle.startZ + particle.kickZ * kickEase * kickDampen + particle.driftZ * driftEase;
+			particleAlphas[i] = Math.max(0, fadeOut) * 0.38;
 			particleSizes[i] = particle.size * MathUtils.lerp(0.75, 1.18, lifeT);
 		}
 
@@ -726,10 +743,10 @@
 
 		const gradientStops = currentTrack?.gradientStops ?? ['#ff184c', '#1887ff'];
 		const decay = isMobile ? lineGhostDecayMobile : lineGhostDecayDesktop;
+		updateWaveformBoost(delta);
 
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
-			updateLineShake(line, delta, audioTime);
 			const centerIndex = Math.round(line.spectrumT * (dataArray.length - 1));
 			const bandRadius = Math.max(1, Math.floor(dataArray.length / Math.max(18, lines.length) / 2));
 			const sampleStart = Math.max(0, centerIndex - bandRadius);
@@ -756,7 +773,18 @@
 			const pulse = scenePulse * Math.pow(nearWeight, 1.3);
 			const widthDrive = Math.min(1, reactivePct * 1.05);
 			const activity = Math.min(1, widthDrive * 1.1 + ghostCurve * 0.9 + pulse * 0.35);
+			line.activity = MathUtils.lerp(line.activity, activity, Math.min(1, delta * 12));
 			const viewportWidthAtLine = getViewportWidthAtZ(line.group.position.z);
+			updateLineWaveform(
+				line,
+				delta,
+				centerIndex,
+				bandRadius,
+				avgPct,
+				peakPct,
+				viewportWidthAtLine,
+				time
+			);
 			const baseHalf =
 				viewportWidthAtLine * MathUtils.lerp(0.0012, 0.018, nearWeight) +
 				viewportWidthAtLine * pulse * MathUtils.lerp(0.0006, 0.004, nearWeight);
@@ -777,7 +805,12 @@
 
 			line.group.position.y = line.baseY + yLift;
 			const coreHalfLength = coreHalfWidth * 0.5;
-			updateLineStripGeometry(line.shell.geometry, shellHalfWidth * 0.5, shellRadius, line.curveOffsets);
+			updateLineStripGeometry(
+				line.shell.geometry,
+				shellHalfWidth * 0.5,
+				shellRadius,
+				line.curveOffsets
+			);
 			updateLineStripGeometry(
 				line.core.geometry,
 				coreHalfLength * 0.95,
@@ -785,7 +818,11 @@
 				line.curveOffsets
 			);
 			const tipScale = (MathUtils.lerp(0.42, 0.88, nearWeight) + reactivePct * 0.35) * activity;
-			line.tipRight.position.set(coreHalfLength - coreRadius * 0.15, line.curveOffsets[lineCurveSegments], 0);
+			line.tipRight.position.set(
+				coreHalfLength - coreRadius * 0.15,
+				line.curveOffsets[lineCurveSegments],
+				0
+			);
 			line.tipRight.scale.setScalar(Math.max(0.001, tipScale));
 			line.tipLeft.position.set(-coreHalfLength + coreRadius * 0.15, line.curveOffsets[0], 0);
 			line.tipLeft.scale.setScalar(Math.max(0.001, tipScale));
@@ -837,7 +874,8 @@
 			const energy = readSceneEnergy(delta);
 			updateGroundLines(energy, now, delta, music?.currentTime ?? 0);
 		}
-		emitLineParticles();
+		updateBeatBoost();
+		emitLineParticles(delta);
 		updateFloatParticles(delta);
 		updateCameraMotion(now, delta);
 
@@ -936,8 +974,12 @@
 
 	function onPlayTrack(audio: TrackAudio, track: Track) {
 		currentTrack = track;
-		lastParticleBeatIndex = -1;
-		lastLineShakeBeatIndex = -1;
+		lastWaveBeatIndex = -1;
+		waveBeatBoost = 0;
+		waveBeatBoostVelocity = 0;
+		for (const line of lines) {
+			line.emissionCarry = 0;
+		}
 		music?.pause();
 		music = audio.audioEl;
 		audioSource = audio.audioSource;
@@ -958,7 +1000,7 @@
 	}
 </script>
 
-<svelte:window bind:innerWidth bind:innerHeight onkeydown={moveCameraControl} />
+<svelte:window bind:innerWidth bind:innerHeight onpointermove={updateCameraOrbit} />
 
 <div class="wrap">
 	<div class="particle-tuning">
@@ -975,33 +1017,21 @@
 			<div class="particle-tuning-panel">
 				<div class="particle-tuning-title">Point Particles</div>
 				<label class="particle-control">
-					<span>Min / line {particleMinPerLine}</span>
+					<span>Idle Rate {particleMinPerLine}</span>
 					<input type="range" min="0" max="40" step="1" bind:value={particleMinPerLine} />
 				</label>
 				<label class="particle-control">
-					<span>Max / line {particleMaxPerLine}</span>
+					<span>Burst Rate {particleMaxPerLine}</span>
 					<input type="range" min="0" max="80" step="1" bind:value={particleMaxPerLine} />
-				</label>
-				<label class="particle-control">
-					<span>Endpoint Bias {particleEndpointBias.toFixed(2)}</span>
-					<input type="range" min="0" max="1" step="0.01" bind:value={particleEndpointBias} />
 				</label>
 				<label class="particle-control checkbox">
 					<input type="checkbox" bind:checked={enableBokeh} />
 					<span>Enable Bokeh</span>
 				</label>
 				<label class="particle-control">
-					<span>Line Shake {lineShakeDegrees.toFixed(1)} deg</span>
-					<input type="range" min="0.5" max="10" step="0.1" bind:value={lineShakeDegrees} />
+					<span>Wave Amp {waveAmplitude.toFixed(1)}</span>
+					<input type="range" min="0.5" max="10" step="0.1" bind:value={waveAmplitude} />
 				</label>
-				<div class="camera-readout">
-					<div class="camera-readout-title">Camera</div>
-					<code>{formatVectorForCode('camera.position', cameraOrigin)}</code>
-					<code>{formatVectorForCode('cameraTarget', cameraTargetPosition)}</code>
-					<div class="camera-help">
-						Arrows move camera. Shift moves target. Option Up/Down moves Z.
-					</div>
-				</div>
 			</div>
 		{/if}
 	</div>
@@ -1097,37 +1127,6 @@
 	}
 	.checkbox input {
 		width: unset;
-	}
-	.camera-readout {
-		display: grid;
-		gap: 6px;
-		margin-top: 12px;
-		padding-top: 10px;
-		border-top: 1px solid rgba(255, 255, 255, 0.16);
-	}
-	.camera-readout-title {
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-	}
-	.camera-readout code {
-		display: block;
-		overflow-wrap: anywhere;
-		border-radius: 6px;
-		background: rgba(0, 0, 0, 0.28);
-		padding: 6px;
-		color: rgba(214, 241, 255, 0.94);
-		font:
-			10px/1.35 ui-monospace,
-			SFMono-Regular,
-			Menlo,
-			Monaco,
-			Consolas,
-			monospace;
-	}
-	.camera-help {
-		color: rgba(255, 255, 255, 0.58);
-		font-size: 10px;
-		line-height: 1.35;
 	}
 	.list {
 		max-width: 440px;
