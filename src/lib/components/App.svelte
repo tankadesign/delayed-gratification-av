@@ -9,7 +9,7 @@
 		BufferAttribute,
 		BufferGeometry,
 		Color,
-		CylinderGeometry,
+		DoubleSide,
 		DynamicDrawUsage,
 		Fog,
 		Group,
@@ -46,8 +46,8 @@
 		spectrumT: number;
 		currentHalfLength: number;
 		currentColor: Color;
-		rollShake: number;
-		rollVelocity: number;
+		curveOffsets: Float32Array;
+		curveVelocities: Float32Array;
 		rollDirection: number;
 		rollPulseAt: number;
 	}
@@ -106,8 +106,6 @@
 	let nextParticleIndex = 0;
 	let lastParticleBeatIndex = -1;
 	let lastLineShakeBeatIndex = -1;
-	let lineShellGeometry: CylinderGeometry | null = null;
-	let lineCoreGeometry: CylinderGeometry | null = null;
 	let lineTipGeometry: SphereGeometry | null = null;
 	let lines: LineNode[] = [];
 	let animationFrameId = 0;
@@ -134,8 +132,9 @@
 	const cameraLoopSeconds = 24;
 	const cameraKeyboardStep = 0.25;
 	const lineShakeCascadeSeconds = 0.22;
-	const lineShakeSpring = 78;
-	const lineShakeDamping = 12;
+	const lineShakeSpring = 68;
+	const lineShakeDamping = 10.5;
+	const lineCurveSegments = 36;
 
 	let isMobile = $derived(innerWidth < 560);
 
@@ -243,11 +242,54 @@
 		};
 	}
 
+	function createLineStripGeometry() {
+		const positions = new Float32Array((lineCurveSegments + 1) * 2 * 3);
+		const indices: number[] = [];
+		for (let i = 0; i < lineCurveSegments; i++) {
+			const a = i * 2;
+			const b = a + 1;
+			const c = a + 2;
+			const d = a + 3;
+			indices.push(a, c, b, b, c, d);
+		}
+		const geometry = new BufferGeometry();
+		const positionAttribute = new BufferAttribute(positions, 3);
+		positionAttribute.setUsage(DynamicDrawUsage);
+		geometry.setAttribute('position', positionAttribute);
+		geometry.setIndex(indices);
+		return geometry;
+	}
+
+	function updateLineStripGeometry(
+		geometry: BufferGeometry,
+		halfLength: number,
+		halfThickness: number,
+		curveOffsets: Float32Array
+	) {
+		const positions = geometry.attributes.position.array as Float32Array;
+		for (let i = 0; i <= lineCurveSegments; i++) {
+			const t = i / lineCurveSegments;
+			const x = MathUtils.lerp(-halfLength, halfLength, t);
+			const y = curveOffsets[i] ?? 0;
+			const offset = i * 6;
+			positions[offset] = x;
+			positions[offset + 1] = y - halfThickness;
+			positions[offset + 2] = 0;
+			positions[offset + 3] = x;
+			positions[offset + 4] = y + halfThickness;
+			positions[offset + 5] = 0;
+		}
+		geometry.attributes.position.needsUpdate = true;
+		geometry.computeBoundingSphere();
+	}
+
 	function setupGroundLines() {
 		if (!groundGroup) return;
 
 		for (const line of lines) {
 			groundGroup.remove(line.group);
+			line.shell.geometry.dispose();
+			line.core.geometry.dispose();
 			line.shellMaterial.dispose();
 			line.coreMaterial.dispose();
 			line.tipMaterial.dispose();
@@ -255,12 +297,6 @@
 		lines = [];
 		groundGroup.clear();
 
-		if (!lineShellGeometry) {
-			lineShellGeometry = new CylinderGeometry(0.12, 0.12, 1, 16, 1, false);
-		}
-		if (!lineCoreGeometry) {
-			lineCoreGeometry = new CylinderGeometry(0.035, 0.035, 1, 12, 1, false);
-		}
 		if (!lineTipGeometry) {
 			lineTipGeometry = new SphereGeometry(0.085, 12, 10);
 		}
@@ -285,14 +321,16 @@
 				transparent: true,
 				opacity: 0.2,
 				blending: AdditiveBlending,
-				depthWrite: false
+				depthWrite: false,
+				side: DoubleSide
 			});
 			const coreMaterial = new MeshBasicMaterial({
 				color: 0xffffff,
 				transparent: true,
 				opacity: 0.92,
 				blending: AdditiveBlending,
-				depthWrite: false
+				depthWrite: false,
+				side: DoubleSide
 			});
 			const tipMaterial = new MeshBasicMaterial({
 				color: 0xffffff,
@@ -302,16 +340,11 @@
 				depthWrite: false
 			});
 
-			const shell = new Mesh(lineShellGeometry, shellMaterial);
-			shell.rotation.z = Math.PI / 2;
-
-			const core = new Mesh(lineCoreGeometry, coreMaterial);
-			core.rotation.z = Math.PI / 2;
+			const shell = new Mesh(createLineStripGeometry(), shellMaterial);
+			const core = new Mesh(createLineStripGeometry(), coreMaterial);
 
 			const tipLeft = new Mesh(lineTipGeometry, tipMaterial);
 			const tipRight = new Mesh(lineTipGeometry, tipMaterial);
-			shell.scale.set(0.001, 0.001, 0.001);
-			core.scale.set(0.001, 0.001, 0.001);
 			tipLeft.scale.setScalar(0.001);
 			tipRight.scale.setScalar(0.001);
 			shellMaterial.opacity = 0;
@@ -338,8 +371,8 @@
 				spectrumT,
 				currentHalfLength: 0,
 				currentColor: new Color(0xffffff),
-				rollShake: 0,
-				rollVelocity: 0,
+				curveOffsets: new Float32Array(lineCurveSegments + 1),
+				curveVelocities: new Float32Array(lineCurveSegments + 1),
 				rollDirection: 1,
 				rollPulseAt: 0
 			});
@@ -464,19 +497,29 @@
 			const distanceT = Math.abs(i - center) / maxDistance;
 			line.rollDirection = Math.random() < 0.5 ? -1 : 1;
 			line.rollPulseAt = nowSeconds + distanceT * lineShakeCascadeSeconds;
-			line.rollVelocity += line.rollDirection * amount * MathUtils.lerp(18, 11, distanceT);
 		}
 	}
 
 	function updateLineShake(line: LineNode, delta: number, nowSeconds: number) {
 		if (line.rollPulseAt && nowSeconds >= line.rollPulseAt) {
-			line.rollShake += line.rollDirection * MathUtils.degToRad(lineShakeDegrees);
+			const amount = MathUtils.degToRad(lineShakeDegrees) * Math.max(0.4, line.currentHalfLength);
+			for (let i = 0; i <= lineCurveSegments; i++) {
+				const t = i / lineCurveSegments;
+				const signedX = t * 2 - 1;
+				const endWeight = Math.pow(Math.abs(signedX), 0.7);
+				const ripple = Math.sin(t * Math.PI * 2 + Math.PI * 0.35) * 0.18;
+				line.curveOffsets[i] += line.rollDirection * signedX * amount * 0.25 * endWeight;
+				line.curveVelocities[i] +=
+					line.rollDirection * (signedX + ripple) * amount * MathUtils.lerp(9, 15, endWeight);
+			}
 			line.rollPulseAt = 0;
 		}
-		const acceleration = -line.rollShake * lineShakeSpring - line.rollVelocity * lineShakeDamping;
-		line.rollVelocity += acceleration * delta;
-		line.rollShake += line.rollVelocity * delta;
-		line.group.rotation.z = line.rollShake;
+		for (let i = 0; i <= lineCurveSegments; i++) {
+			const acceleration =
+				-line.curveOffsets[i] * lineShakeSpring - line.curveVelocities[i] * lineShakeDamping;
+			line.curveVelocities[i] += acceleration * delta;
+			line.curveOffsets[i] += line.curveVelocities[i] * delta;
+		}
 	}
 
 	function formatCameraValue(value: number) {
@@ -733,21 +776,18 @@
 			const coreRadius = shellRadius * 0.05;
 
 			line.group.position.y = line.baseY + yLift;
-			line.shell.scale.set(
-				Math.max(0.001, shellRadius / 0.12),
-				Math.max(0.001, shellHalfWidth),
-				Math.max(0.001, shellRadius / 0.12)
-			);
-			line.core.scale.set(
-				Math.max(0.001, coreRadius / 0.035),
-				Math.max(0.001, coreHalfWidth * 0.95),
-				Math.max(0.001, coreRadius / 0.035)
-			);
 			const coreHalfLength = coreHalfWidth * 0.5;
+			updateLineStripGeometry(line.shell.geometry, shellHalfWidth * 0.5, shellRadius, line.curveOffsets);
+			updateLineStripGeometry(
+				line.core.geometry,
+				coreHalfLength * 0.95,
+				Math.max(0.001, coreRadius),
+				line.curveOffsets
+			);
 			const tipScale = (MathUtils.lerp(0.42, 0.88, nearWeight) + reactivePct * 0.35) * activity;
-			line.tipRight.position.set(coreHalfLength - coreRadius * 0.15, 0, 0);
+			line.tipRight.position.set(coreHalfLength - coreRadius * 0.15, line.curveOffsets[lineCurveSegments], 0);
 			line.tipRight.scale.setScalar(Math.max(0.001, tipScale));
-			line.tipLeft.position.set(-coreHalfLength + coreRadius * 0.15, 0, 0);
+			line.tipLeft.position.set(-coreHalfLength + coreRadius * 0.15, line.curveOffsets[0], 0);
 			line.tipLeft.scale.setScalar(Math.max(0.001, tipScale));
 			line.currentHalfLength = Math.max(0, coreHalfLength - coreRadius * 0.15);
 
@@ -815,16 +855,14 @@
 		window.removeEventListener('resize', onResize);
 
 		for (const line of lines) {
+			line.shell.geometry.dispose();
+			line.core.geometry.dispose();
 			line.shellMaterial.dispose();
 			line.coreMaterial.dispose();
 			line.tipMaterial.dispose();
 		}
 		lines = [];
 
-		lineShellGeometry?.dispose();
-		lineShellGeometry = null;
-		lineCoreGeometry?.dispose();
-		lineCoreGeometry = null;
 		lineTipGeometry?.dispose();
 		lineTipGeometry = null;
 
