@@ -19,11 +19,14 @@
 		Scene,
 		ShaderMaterial,
 		SphereGeometry,
+		Vector2,
 		Vector3,
 		WebGLRenderer
 	} from 'three';
 	import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 	import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+	import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+	import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 
 	interface Props {
 		currentTrack?: Track | null;
@@ -88,6 +91,8 @@
 	let scene: Scene | null = null;
 	let camera: PerspectiveCamera | null = null;
 	let composer: EffectComposer | null = null;
+	let bloomPass: UnrealBloomPass | null = null;
+	let atmospherePass: ShaderPass | null = null;
 	let groundGroup: Group | null = null;
 	let cameraTarget = new Vector3(0, -3.4, -45);
 	let cameraOrigin = { x: -17, y: 1, z: 10.5 };
@@ -135,6 +140,66 @@
 	const waveformSpring = 62;
 	const waveformDamping = 11;
 	const lineCurveSegments = 36;
+	const atmosphereShader = {
+		uniforms: {
+			tDiffuse: { value: null },
+			resolution: { value: new Vector2(1, 1) },
+			time: { value: 0 },
+			streakStrength: { value: 0.18 },
+			grainStrength: { value: 0.045 },
+			vignetteStrength: { value: 0.42 }
+		},
+		vertexShader: `
+			varying vec2 vUv;
+
+			void main() {
+				vUv = uv;
+				gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+			}
+		`,
+		fragmentShader: `
+			uniform sampler2D tDiffuse;
+			uniform vec2 resolution;
+			uniform float time;
+			uniform float streakStrength;
+			uniform float grainStrength;
+			uniform float vignetteStrength;
+			varying vec2 vUv;
+
+			float rand(vec2 co) {
+				return fract(sin(dot(co.xy, vec2(12.9898, 78.233))) * 43758.5453);
+			}
+
+			float dgPostLuma(vec3 color) {
+				return dot(color, vec3(0.299, 0.587, 0.114));
+			}
+
+			void main() {
+				vec4 base = texture2D(tDiffuse, vUv);
+				vec2 texel = 1.0 / max(resolution, vec2(1.0));
+				vec3 streak = vec3(0.0);
+
+				for (int i = 1; i <= 8; i++) {
+					float f = float(i);
+					float weight = exp(-f * 0.34);
+					vec3 left = texture2D(tDiffuse, vUv - vec2(texel.x * f * 5.5, 0.0)).rgb;
+					vec3 right = texture2D(tDiffuse, vUv + vec2(texel.x * f * 5.5, 0.0)).rgb;
+					streak += max(left - 0.32, 0.0) * weight;
+					streak += max(right - 0.32, 0.0) * weight;
+				}
+
+				vec2 centered = vUv - 0.5;
+				float vignette = smoothstep(0.92, 0.18, dot(centered, centered) * 1.65);
+				float grain = (rand(gl_FragCoord.xy + time * 58.0) - 0.5) * grainStrength;
+				vec3 color = base.rgb + streak * streakStrength;
+				color += grain;
+				color *= mix(1.0 - vignetteStrength, 1.0, vignette);
+				color += pow(max(dgPostLuma(color) - 0.5, 0.0), 2.0) * vec3(0.04, 0.055, 0.08);
+
+				gl_FragColor = vec4(color, base.a);
+			}
+		`
+	};
 
 	let isMobile = $derived(innerWidth < 560);
 
@@ -375,6 +440,13 @@
 		camera.aspect = width / height;
 		camera.updateProjectionMatrix();
 		composer?.setSize(width, height);
+		bloomPass?.setSize(width, height);
+		if (atmospherePass) {
+			atmospherePass.uniforms.resolution.value.set(
+				width * getPixelRatio(),
+				height * getPixelRatio()
+			);
+		}
 		if (particleMaterial) {
 			particleMaterial.uniforms.pixelRatio.value = getPixelRatio();
 		}
@@ -706,6 +778,16 @@
 
 		composer = new EffectComposer(renderer);
 		composer.addPass(new RenderPass(scene, camera));
+		bloomPass = new UnrealBloomPass(
+			new Vector2(width * getPixelRatio(), height * getPixelRatio()),
+			isMobile ? 0.42 : 0.58,
+			isMobile ? 0.72 : 0.84,
+			0.48
+		);
+		composer.addPass(bloomPass);
+		atmospherePass = new ShaderPass(atmosphereShader);
+		atmospherePass.uniforms.resolution.value.set(width * getPixelRatio(), height * getPixelRatio());
+		composer.addPass(atmospherePass);
 
 		window.addEventListener('resize', onResize);
 	}
@@ -861,6 +943,21 @@
 		emitLineParticles(delta);
 		updateFloatParticles(delta);
 		updateCameraMotion(now, delta);
+		if (atmospherePass) {
+			atmospherePass.uniforms.time.value = now / 1000;
+			atmospherePass.uniforms.streakStrength.value = MathUtils.lerp(
+				atmospherePass.uniforms.streakStrength.value,
+				0.14 + Math.min(0.18, waveBeatBoost * 0.04 + scenePulse * 0.03),
+				Math.min(1, delta * 4)
+			);
+		}
+		if (bloomPass) {
+			bloomPass.strength = MathUtils.lerp(
+				bloomPass.strength,
+				(isMobile ? 0.38 : 0.52) + Math.min(0.25, waveBeatBoost * 0.04 + scenePulse * 0.05),
+				Math.min(1, delta * 5)
+			);
+		}
 
 		if (composer) {
 			composer.render(delta);
@@ -903,6 +1000,10 @@
 
 		composer?.dispose();
 		composer = null;
+		bloomPass?.dispose();
+		bloomPass = null;
+		atmospherePass?.dispose();
+		atmospherePass = null;
 
 		scene?.clear();
 		scene = null;
@@ -972,17 +1073,6 @@
 		flex-direction: column;
 		align-items: flex-end;
 		gap: 8px;
-	}
-	.particle-tuning-toggle {
-		background: rgba(9, 12, 22, 0.58);
-		border: 1px solid rgba(255, 255, 255, 0.26);
-		color: rgba(255, 255, 255, 0.92);
-		padding: 6px 10px;
-		border-radius: 8px;
-		font-size: 11px;
-		line-height: 1;
-		font-family: inherit;
-		cursor: pointer;
 	}
 	.particle-tuning-panel {
 		width: min(260px, calc(100vw - 28px));
