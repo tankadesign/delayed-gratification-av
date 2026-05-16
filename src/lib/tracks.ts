@@ -7,7 +7,9 @@ export const tracks: Track[] = [
 		file: '/Club_Foot.m4a',
 		isPlaying: false,
 		released: 'March 26th, 2024',
-		hue: 180
+		hue: 180,
+		gradientStops: ['#ff184c', '#FF8661', '#18C1FF', '#FE35F1', '#D261FF'],
+		bpm: 108
 	},
 	{
 		id: 'gtnw',
@@ -15,7 +17,9 @@ export const tracks: Track[] = [
 		file: '/GTNW.m4a',
 		isPlaying: false,
 		released: 'January 20th, 2024',
-		hue: 5
+		hue: 5,
+		gradientStops: ['#FF1500', '#F5B546', '#ff4b00', '#ffb000', '#fff3a0'],
+		bpm: 86
 	},
 	{
 		id: 'connecting-dots',
@@ -23,7 +27,9 @@ export const tracks: Track[] = [
 		file: '/Connecting_Dots.m4a',
 		isPlaying: false,
 		released: 'September 18th, 2023',
-		hue: 50
+		hue: 50,
+		gradientStops: ['#59F9FF', '#0a5cff', '#00d4ff', '#59F9FF', '#0a5cff', '#00d4ff'],
+		bpm: 105
 	},
 	{
 		id: 'delayed-gratification',
@@ -31,6 +37,8 @@ export const tracks: Track[] = [
 		file: '/Delayed_Gratification.m4a',
 		isPlaying: false,
 		released: 'September 1st, 2023',
-		hue: 150
+		hue: 150,
+		gradientStops: ['#752CFB', '#e33f7f', '#ffb45c', '#6ef3c5'],
+		bpm: 116
 	}
 ];
