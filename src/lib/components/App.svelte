@@ -1,8 +1,9 @@
 <script lang="ts">
 	import TrackComponent from '$lib/components/Track.svelte';
+	import { evaluateBeatBand, resolveEffectiveBpm } from '$lib/beat-detector';
 	import { store } from '$lib/store.svelte';
-	import { tracks } from '$lib/tracks';
-	import type { Track, TrackAudio } from '$lib/types';
+	import { defaultBeatConfig, tracks } from '$lib/tracks';
+	import type { BeatConfig, Track, TrackAudio } from '$lib/types';
 	import { onDestroy, onMount } from 'svelte';
 	import {
 		AdditiveBlending,
@@ -82,6 +83,7 @@
 	let composer: EffectComposer | null = null;
 	let bokehPass: BokehPass | null = null;
 	let groundGroup: Group | null = null;
+	let particleGroup: Group | null = null;
 	let lineShellGeometry: CylinderGeometry | null = null;
 	let lineCoreGeometry: CylinderGeometry | null = null;
 	let lineTipGeometry: SphereGeometry | null = null;
@@ -96,15 +98,24 @@
 	let smoothedMid = 0;
 	let smoothedHigh = 0;
 	let smoothedTransient = 0;
-	let previousTransient = 0;
-	let beatSpawnCooldown = 0;
+	let downbeatAverage = 0;
+	let accentAverage = 0;
+	let downbeatCutoff = $state(0);
+	let accentCutoff = 0;
+	let lastDownbeatHitTime = 0;
+	let lastAccentHitTime = 0;
+	let estimatedBpm = 0;
 	let scenePulse = 0;
 	let showTuningPanel = $state(true);
-	let debugBeatDetected = $state(false);
-	let debugPeakSpawn = $state(0);
-	let debugBeatThreshold = $state(0);
-	let debugTransientLevel = $state(0);
-	let debugBeatStrength = $state(0);
+	let activeBeatConfig = $state<BeatConfig>({ ...defaultBeatConfig });
+	let debugDownbeatDetected = $state(false);
+	let debugAccentDetected = $state(false);
+	let debugDownbeatEnergy = $state(0);
+	let debugAccentEnergy = $state(0);
+	let debugLargeSpawn = $state(0);
+	let debugSmallSpawn = $state(0);
+	let debugBpm = $state(0);
+	let beatConfigExport = $state('');
 
 	const lineGhostDecayDesktop = 0.992;
 	const lineGhostDecayMobile = 0.988;
@@ -113,50 +124,9 @@
 	const maxParticlesMobile = 55;
 	const lineCountDesktop = 60;
 	const lineCountMobile = 26;
-	// Beat detector floor for transient energy. Lower = triggers more often, higher = stricter beat detection.
-	let beatThresholdDesktop = $state(0.53);
-	let beatThresholdMobile = $state(0.53);
-	// Beat must rise this much frame-to-frame to count as a hit.
-	// Lower for more frequent bursts, raise to avoid micro-spikes.
-	let beatRiseThreshold = $state(0.007);
-	// Minimum bass energy required for beat-triggered bursts.
-	let beatBassThreshold = $state(0.12);
-	// Seconds between beat-triggered bursts.
-	// Lower min/max = denser bursts; higher min/max = more spacing.
-	let beatCooldownMin = $state(0.011);
-	let beatCooldownMax = $state(0.017);
-	// Base particles fired whenever a beat is detected (before strength scaling).
-	let beatBurstBaseDesktop = $state(48);
-	let beatBurstBaseMobile = $state(10);
-	// Additional particles added as beat strength approaches 1.
-	// Formula: base + round(power * beatStrength).
-	let beatBurstPowerDesktop = $state(42);
-	let beatBurstPowerMobile = $state(24);
-	// Extra particles granted by the 800Hz-2kHz presence band.
-	// Higher values emphasize bursts on bright/presence-heavy moments.
-	let beatBurstPresenceBonusDesktop = $state(10);
-	let beatBurstPresenceBonusMobile = $state(6);
-	// Final hard cap per beat burst. Primary knob for "max amount" requested.
-	// Raise if you still want denser bursts, lower to control performance.
-	let beatBurstMaxDesktop = $state(180);
-	let beatBurstMaxMobile = $state(120);
-
-	function resetBeatTuning() {
-		beatThresholdDesktop = 0.53;
-		beatThresholdMobile = 0.53;
-		beatRiseThreshold = 0.018;
-		beatBassThreshold = 0.12;
-		beatCooldownMin = 0.011;
-		beatCooldownMax = 0.017;
-		beatBurstBaseDesktop = 48;
-		beatBurstBaseMobile = 10;
-		beatBurstPowerDesktop = 42;
-		beatBurstPowerMobile = 24;
-		beatBurstPresenceBonusDesktop = 10;
-		beatBurstPresenceBonusMobile = 6;
-		beatBurstMaxDesktop = 180;
-		beatBurstMaxMobile = 120;
-	}
+	const localBeatConfigPrefix = 'delayed-gratification-av:v2:beat-config:';
+	const downbeatCutoffDecayPerSecond = 1.7;
+	const accentCutoffDecayPerSecond = 2.4;
 
 	let isMobile = $derived(innerWidth < 560);
 
@@ -214,6 +184,124 @@
 			count += 1;
 		}
 		return count ? total / (count * 255) : 0;
+	}
+
+	function normalizeBeatConfig(config?: Partial<BeatConfig>): BeatConfig {
+		return {
+			...defaultBeatConfig,
+			...(config ?? {})
+		};
+	}
+
+	function getTrackBeatDefaults(track?: Track | null) {
+		return normalizeBeatConfig(track?.beatConfig);
+	}
+
+	function getBeatConfigStorageKey(track?: Track | null) {
+		return track ? `${localBeatConfigPrefix}${track.id}` : '';
+	}
+
+	function readStoredBeatConfig(track?: Track | null) {
+		if (typeof localStorage === 'undefined' || !track) return null;
+		const rawConfig = localStorage.getItem(getBeatConfigStorageKey(track));
+		if (!rawConfig) return null;
+		try {
+			return normalizeBeatConfig(JSON.parse(rawConfig) as Partial<BeatConfig>);
+		} catch {
+			return null;
+		}
+	}
+
+	function updateBeatConfigExport() {
+		beatConfigExport = JSON.stringify(activeBeatConfig, null, 2);
+	}
+
+	function resetBeatDetectorState() {
+		downbeatAverage = 0;
+		accentAverage = 0;
+		downbeatCutoff = activeBeatConfig.downbeatMinEnergy;
+		accentCutoff = activeBeatConfig.accentMinEnergy;
+		lastDownbeatHitTime = 0;
+		lastAccentHitTime = 0;
+		estimatedBpm = 0;
+		debugDownbeatDetected = false;
+		debugAccentDetected = false;
+		debugLargeSpawn = 0;
+		debugSmallSpawn = 0;
+		debugBpm = 0;
+	}
+
+	function loadBeatConfigForTrack(track?: Track | null) {
+		activeBeatConfig = readStoredBeatConfig(track) ?? getTrackBeatDefaults(track);
+		resetBeatDetectorState();
+		updateBeatConfigExport();
+	}
+
+	function saveCurrentBeatConfig() {
+		if (typeof localStorage !== 'undefined' && currentTrack) {
+			localStorage.setItem(getBeatConfigStorageKey(currentTrack), JSON.stringify(activeBeatConfig));
+		}
+		updateBeatConfigExport();
+	}
+
+	function setBeatConfigValue(key: keyof BeatConfig, value: number) {
+		activeBeatConfig = {
+			...activeBeatConfig,
+			[key]: value
+		};
+		saveCurrentBeatConfig();
+	}
+
+	function resetBeatTuning() {
+		activeBeatConfig = getTrackBeatDefaults(currentTrack);
+		saveCurrentBeatConfig();
+		resetBeatDetectorState();
+	}
+
+	function clearLocalBeatOverride() {
+		if (typeof localStorage !== 'undefined' && currentTrack) {
+			localStorage.removeItem(getBeatConfigStorageKey(currentTrack));
+		}
+		activeBeatConfig = getTrackBeatDefaults(currentTrack);
+		resetBeatDetectorState();
+		updateBeatConfigExport();
+	}
+
+	function isNearBpmGrid(nowSeconds: number, lastHitSeconds: number) {
+		const effectiveBpm = resolveEffectiveBpm(activeBeatConfig.targetBpm, estimatedBpm);
+		if (!effectiveBpm || !lastHitSeconds || activeBeatConfig.bpmLockStrength <= 0) return true;
+		const beatSeconds = 60 / effectiveBpm;
+		const sinceLast = nowSeconds - lastHitSeconds;
+		if (sinceLast <= 0) return false;
+		const nearestBeat = Math.max(1, Math.round(sinceLast / beatSeconds));
+		const distance = Math.abs(sinceLast - nearestBeat * beatSeconds);
+		const toleranceSeconds = beatSeconds * activeBeatConfig.bpmTimingTolerance;
+		const lockAllowance = MathUtils.lerp(
+			beatSeconds,
+			toleranceSeconds,
+			activeBeatConfig.bpmLockStrength
+		);
+		return distance <= lockAllowance;
+	}
+
+	function updateEstimatedBpm(nowSeconds: number) {
+		if (activeBeatConfig.targetBpm > 0) {
+			estimatedBpm = activeBeatConfig.targetBpm;
+			debugBpm = activeBeatConfig.targetBpm;
+			lastDownbeatHitTime = nowSeconds;
+			return;
+		}
+		if (!lastDownbeatHitTime) {
+			lastDownbeatHitTime = nowSeconds;
+			return;
+		}
+		const interval = nowSeconds - lastDownbeatHitTime;
+		lastDownbeatHitTime = nowSeconds;
+		if (interval <= 0) return;
+		const candidateBpm = 60 / interval;
+		if (candidateBpm < activeBeatConfig.bpmMin || candidateBpm > activeBeatConfig.bpmMax) return;
+		estimatedBpm = estimatedBpm ? MathUtils.lerp(estimatedBpm, candidateBpm, 0.28) : candidateBpm;
+		debugBpm = estimatedBpm;
 	}
 
 	function readSceneEnergy(delta: number): SceneEnergy {
@@ -362,7 +450,7 @@
 			});
 			const mesh = new Mesh(sphereGeometry, material);
 			mesh.visible = false;
-			scene.add(mesh);
+			particleGroup.add(mesh);
 			particles.push({
 				mesh,
 				material,
@@ -417,6 +505,10 @@
 		groundGroup = new Group();
 		scene.add(groundGroup);
 
+		particleGroup = new Group();
+		scene.add(particleGroup);
+		particleGroup.position.y = 1;
+
 		setupGroundLines();
 		setupSpherePool();
 
@@ -432,7 +524,7 @@
 		window.addEventListener('resize', onResize);
 	}
 
-	function activateParticle(energy: SceneEnergy) {
+	function activateParticle(energy: SceneEnergy, size: 'large' | 'small') {
 		const particle = particles.find((entry) => !entry.active);
 		if (!particle) return;
 
@@ -444,17 +536,16 @@
 		const spawnWidth = getViewportWidthAtZ(startZ) * 1.2;
 		const startX = (Math.random() - 0.5) * spawnWidth;
 		const xAccelScale = MathUtils.lerp(0.35, 0.85, Math.random());
-		const yAccelScale = MathUtils.lerp(0.75, 1.35, Math.random());
-		const zAccelScale = MathUtils.lerp(0.7, 1.55, Math.random());
+		const yAccelScale = MathUtils.lerp(0.75, 0.85, Math.random());
+		const zAccelScale = MathUtils.lerp(2, 8.0, Math.random());
 
 		particle.mesh.position.set(startX, -4.9 + Math.random() * 0.9, startZ);
 		const smallBias = Math.pow(Math.random(), 2.6);
-		const mostlySmallScale = MathUtils.lerp(0.16, isMobile ? 1.05 : 1.45, smallBias);
-		const largeChance = MathUtils.lerp(0.03, 0.28, Math.min(1, energy.presence800to2k * 1.25));
-		const spawnLarge = energy.presence800to2k > 0.22 && Math.random() < largeChance;
+		const mostlySmallScale = MathUtils.lerp(0.14, isMobile ? 0.8 : 1.16, smallBias);
+		const spawnLarge = size === 'large';
 		const largeScale = MathUtils.lerp(
-			isMobile ? 1.2 : 1.8,
-			isMobile ? 2.2 : 3.2,
+			isMobile ? 1.35 : 2.1,
+			isMobile ? 2.7 : 4.2,
 			Math.pow(Math.random(), 0.65)
 		);
 		particle.isLarge = spawnLarge;
@@ -470,8 +561,10 @@
 		particle.velocityY = 0.05 + Math.random() * 0.14 + energy.mid * 0.2;
 		particle.accelerationX =
 			-Math.sign(startX || 1) * (0.08 + Math.abs(startX) * 0.04) * xAccelScale;
-		particle.accelerationZ = -(7 + Math.random() * 10 + energy.transient * 18) * zAccelScale;
-		particle.accelerationY = (0.45 + Math.random() * 0.9 + energy.mid * 1.2) * yAccelScale;
+		particle.accelerationZ =
+			-(7 + Math.random() * 10 + energy.transient * 18 + (spawnLarge ? 5 : 0)) * zAccelScale;
+		particle.accelerationY =
+			(0.45 + Math.random() * 0.9 + energy.mid * 1.2 + (spawnLarge ? 0.18 : 0)) * yAccelScale;
 		particle.growDuration = MathUtils.lerp(0.12, 0.24, Math.random());
 		particle.life = 0;
 		particle.maxLife = 1.6 + Math.random() * 1.1;
@@ -480,48 +573,105 @@
 	}
 
 	function updateParticles(delta: number, energy: SceneEnergy) {
-		beatSpawnCooldown = Math.max(0, beatSpawnCooldown - delta);
-		const transientRise = Math.max(0, energy.transient - previousTransient);
-		const beatThreshold = isMobile ? beatThresholdMobile : beatThresholdDesktop;
-		const cooldownMin = Math.min(beatCooldownMin, beatCooldownMax);
-		const cooldownMax = Math.max(beatCooldownMin, beatCooldownMax);
-		debugBeatThreshold = beatThreshold;
-		debugTransientLevel = energy.transient;
-		const beatDetected =
-			beatSpawnCooldown <= 0 &&
-			energy.transient > beatThreshold &&
-			transientRise > beatRiseThreshold &&
-			energy.bass > beatBassThreshold;
-
-		let peakSpawn = 0;
-		let beatStrength = 0;
-		if (beatDetected) {
-			beatStrength = Math.min(1, energy.transient * 1.8 + energy.bass * 1.2 + energy.mid * 0.25);
-			const baseBurst = isMobile ? beatBurstBaseMobile : beatBurstBaseDesktop;
-			const burstPower = isMobile ? beatBurstPowerMobile : beatBurstPowerDesktop;
-			const presenceBonusMax = isMobile
-				? beatBurstPresenceBonusMobile
-				: beatBurstPresenceBonusDesktop;
-			const maxBurst = isMobile ? beatBurstMaxMobile : beatBurstMaxDesktop;
-
-			peakSpawn = baseBurst + Math.round(burstPower * beatStrength);
-			if (energy.presence800to2k > 0.24) {
-				peakSpawn += Math.round(presenceBonusMax * energy.presence800to2k);
-			}
-			peakSpawn = Math.min(maxBurst, peakSpawn);
-			beatSpawnCooldown = MathUtils.lerp(cooldownMin, cooldownMax, 1 - beatStrength);
-		}
-		debugBeatDetected = beatDetected;
-		debugPeakSpawn = peakSpawn;
-		debugBeatStrength = beatStrength;
-		previousTransient = MathUtils.lerp(
-			previousTransient,
-			energy.transient,
-			Math.min(1, delta * 18)
+		const nowSeconds = music?.currentTime ?? performance.now() / 1000;
+		const downbeatEnergy = averageFrequencyBand(
+			Math.min(activeBeatConfig.downbeatMinHz, activeBeatConfig.downbeatMaxHz),
+			Math.max(activeBeatConfig.downbeatMinHz, activeBeatConfig.downbeatMaxHz)
 		);
+		const accentEnergy = averageFrequencyBand(
+			Math.min(activeBeatConfig.accentMinHz, activeBeatConfig.accentMaxHz),
+			Math.max(activeBeatConfig.accentMinHz, activeBeatConfig.accentMaxHz)
+		);
+		const averageSmoothing = Math.min(1, delta * 1.8);
+		downbeatAverage = downbeatAverage
+			? MathUtils.lerp(downbeatAverage, downbeatEnergy, averageSmoothing)
+			: downbeatEnergy;
+		accentAverage = accentAverage
+			? MathUtils.lerp(accentAverage, accentEnergy, averageSmoothing)
+			: accentEnergy;
 
-		for (let i = 0; i < peakSpawn; i++) {
-			activateParticle(energy);
+		const effectiveBpm = resolveEffectiveBpm(activeBeatConfig.targetBpm, estimatedBpm);
+		const downbeatIntervalSeconds = effectiveBpm
+			? (60 / effectiveBpm) * 0.62
+			: 60 / activeBeatConfig.bpmMax;
+		const downbeatResult = evaluateBeatBand({
+			energy: downbeatEnergy,
+			cutoff: downbeatCutoff,
+			minEnergy: activeBeatConfig.downbeatMinEnergy,
+			threshold: activeBeatConfig.downbeatThreshold,
+			decayPerSecond: downbeatCutoffDecayPerSecond,
+			delta,
+			nowSeconds,
+			lastHitSeconds: lastDownbeatHitTime,
+			minIntervalSeconds: downbeatIntervalSeconds
+		});
+		const accentResult = evaluateBeatBand({
+			energy: accentEnergy,
+			cutoff: accentCutoff,
+			minEnergy: activeBeatConfig.accentMinEnergy,
+			threshold: activeBeatConfig.accentThreshold,
+			decayPerSecond: accentCutoffDecayPerSecond,
+			delta,
+			nowSeconds,
+			lastHitSeconds: lastAccentHitTime,
+			minIntervalSeconds: 0.095
+		});
+		downbeatCutoff = downbeatResult.cutoff;
+		accentCutoff = accentResult.cutoff;
+		const downbeatDetected =
+			downbeatResult.detected && isNearBpmGrid(nowSeconds, lastDownbeatHitTime);
+		const accentDetected = accentResult.detected && isNearBpmGrid(nowSeconds, lastDownbeatHitTime);
+
+		let largeSpawn = 0;
+		let smallSpawn = 0;
+		if (downbeatDetected) {
+			const downbeatStrength = Math.min(
+				2.5,
+				downbeatEnergy / Math.max(0.001, activeBeatConfig.downbeatMinEnergy)
+			);
+			const burst = isMobile
+				? activeBeatConfig.downbeatBurstMobile
+				: activeBeatConfig.downbeatBurstDesktop;
+			const maxBurst = isMobile
+				? activeBeatConfig.downbeatBurstMaxMobile
+				: activeBeatConfig.downbeatBurstMaxDesktop;
+			largeSpawn = Math.min(
+				maxBurst,
+				Math.round(burst * MathUtils.lerp(0.55, 1.35, downbeatStrength / 2.5))
+			);
+			updateEstimatedBpm(nowSeconds);
+		}
+		if (accentDetected) {
+			const accentStrength = Math.min(
+				2.5,
+				accentEnergy / Math.max(0.001, activeBeatConfig.accentMinEnergy)
+			);
+			const burst = isMobile
+				? activeBeatConfig.accentBurstMobile
+				: activeBeatConfig.accentBurstDesktop;
+			const maxBurst = isMobile
+				? activeBeatConfig.accentBurstMaxMobile
+				: activeBeatConfig.accentBurstMaxDesktop;
+			smallSpawn = Math.min(
+				maxBurst,
+				Math.round(burst * MathUtils.lerp(0.45, 1.45, accentStrength / 2.5))
+			);
+			lastAccentHitTime = nowSeconds;
+		}
+
+		debugDownbeatDetected = downbeatDetected;
+		debugAccentDetected = accentDetected;
+		debugDownbeatEnergy = downbeatEnergy;
+		debugAccentEnergy = accentEnergy;
+		debugLargeSpawn = largeSpawn;
+		debugSmallSpawn = smallSpawn;
+		debugBpm = resolveEffectiveBpm(activeBeatConfig.targetBpm, estimatedBpm);
+
+		for (let i = 0; i < largeSpawn; i++) {
+			activateParticle(energy, 'large');
+		}
+		for (let i = 0; i < smallSpawn; i++) {
+			activateParticle(energy, 'small');
 		}
 
 		for (const particle of particles) {
@@ -541,7 +691,7 @@
 			particle.velocityY += particle.accelerationY * delta * 20 * accelRamp;
 			particle.mesh.position.x += particle.velocityX * delta;
 			particle.mesh.position.z += particle.velocityZ * delta;
-			particle.mesh.position.y += particle.velocityY * delta;
+			//particle.mesh.position.y += particle.velocityY * delta;
 
 			const lifeT = particle.life / particle.maxLife;
 			const growT = Math.min(1, particle.life / particle.growDuration);
@@ -731,6 +881,7 @@
 	}
 
 	onMount(() => {
+		loadBeatConfigForTrack(currentTrack);
 		initThree();
 		animationFrameId = requestAnimationFrame(animateFrame);
 	});
@@ -774,6 +925,7 @@
 
 	function onPlayTrack(audio: TrackAudio, track: Track) {
 		currentTrack = track;
+		loadBeatConfigForTrack(track);
 		music?.pause();
 		music = audio.audioEl;
 		audioSource = audio.audioSource;
@@ -800,33 +952,33 @@
 	<div class="beat-debug" aria-hidden="true">
 		<div class="beat-debug-title">Beat Detector</div>
 		<div class="beat-debug-row">
-			<span>Transient</span>
-			<span>{debugTransientLevel.toFixed(3)}</span>
+			<span>Track</span>
+			<span>{currentTrack?.name ?? 'none'}</span>
 		</div>
 		<div class="beat-debug-row">
-			<span>Threshold</span>
-			<span>{debugBeatThreshold.toFixed(3)}</span>
+			<span>Downbeat</span>
+			<span>{debugDownbeatDetected ? 'hit' : debugDownbeatEnergy.toFixed(3)}</span>
 		</div>
 		<div class="beat-debug-row">
-			<span>Beat Active</span>
-			<span>{debugBeatDetected ? 'yes' : 'no'}</span>
+			<span>Accent</span>
+			<span>{debugAccentDetected ? 'hit' : debugAccentEnergy.toFixed(3)}</span>
 		</div>
 		<div class="beat-debug-row">
-			<span>Spawned</span>
-			<span>{debugPeakSpawn}</span>
+			<span>Spawn L / S</span>
+			<span>{debugLargeSpawn} / {debugSmallSpawn}</span>
 		</div>
 		<div class="beat-debug-row">
-			<span>Strength</span>
-			<span>{debugBeatStrength.toFixed(3)}</span>
+			<span>BPM</span>
+			<span>{debugBpm ? debugBpm.toFixed(1) : '-'}</span>
 		</div>
 		<div class="beat-meter">
 			<div
 				class="beat-meter-fill"
-				style={`width: ${Math.min(100, debugTransientLevel * 100)}%`}
+				style={`width: ${Math.min(100, debugDownbeatEnergy * 100)}%`}
 			></div>
 			<div
 				class="beat-meter-threshold"
-				style={`left: ${Math.min(100, debugBeatThreshold * 100)}%`}
+				style={`left: ${Math.min(100, downbeatCutoff * 100)}%`}
 			></div>
 		</div>
 	</div>
@@ -843,97 +995,262 @@
 		{#if showTuningPanel}
 			<div class="tuning-panel">
 				<div class="tuning-header">
-					<span>Beat Tuning</span>
+					<span>{currentTrack?.id ?? 'Beat'} Config</span>
 					<button class="tuning-reset" type="button" onclick={resetBeatTuning}>Reset</button>
 				</div>
 				<div class="tuning-grid">
 					<label class="tuning-control">
-						<span>Threshold D {beatThresholdDesktop.toFixed(3)}</span>
+						<span>Down Hz Min {activeBeatConfig.downbeatMinHz}</span>
 						<input
 							type="range"
-							min="0.05"
-							max="0.8"
-							step="0.001"
-							bind:value={beatThresholdDesktop}
+							min="20"
+							max="420"
+							step="1"
+							value={activeBeatConfig.downbeatMinHz}
+							oninput={(e) => setBeatConfigValue('downbeatMinHz', Number(e.currentTarget.value))}
 						/>
 					</label>
 					<label class="tuning-control">
-						<span>Threshold M {beatThresholdMobile.toFixed(3)}</span>
+						<span>Down Hz Max {activeBeatConfig.downbeatMaxHz}</span>
 						<input
 							type="range"
-							min="0.05"
-							max="0.4"
-							step="0.001"
-							bind:value={beatThresholdMobile}
+							min="40"
+							max="1200"
+							step="1"
+							value={activeBeatConfig.downbeatMaxHz}
+							oninput={(e) => setBeatConfigValue('downbeatMaxHz', Number(e.currentTarget.value))}
 						/>
 					</label>
 					<label class="tuning-control">
-						<span>Rise {beatRiseThreshold.toFixed(3)}</span>
+						<span>Down Threshold {activeBeatConfig.downbeatThreshold.toFixed(2)}</span>
+						<input
+							type="range"
+							min="1.05"
+							max="4"
+							step="0.01"
+							value={activeBeatConfig.downbeatThreshold}
+							oninput={(e) =>
+								setBeatConfigValue('downbeatThreshold', Number(e.currentTarget.value))}
+						/>
+					</label>
+					<label class="tuning-control">
+						<span>Down Gate {activeBeatConfig.downbeatMinEnergy.toFixed(3)}</span>
 						<input
 							type="range"
 							min="0.005"
-							max="0.08"
+							max="0.6"
 							step="0.001"
-							bind:value={beatRiseThreshold}
+							value={activeBeatConfig.downbeatMinEnergy}
+							oninput={(e) =>
+								setBeatConfigValue('downbeatMinEnergy', Number(e.currentTarget.value))}
 						/>
 					</label>
 					<label class="tuning-control">
-						<span>Bass Gate {beatBassThreshold.toFixed(3)}</span>
-						<input type="range" min="0.03" max="0.45" step="0.001" bind:value={beatBassThreshold} />
+						<span>Large Burst D {activeBeatConfig.downbeatBurstDesktop}</span>
+						<input
+							type="range"
+							min="0"
+							max="360"
+							step="1"
+							value={activeBeatConfig.downbeatBurstDesktop}
+							oninput={(e) =>
+								setBeatConfigValue('downbeatBurstDesktop', Number(e.currentTarget.value))}
+						/>
 					</label>
 					<label class="tuning-control">
-						<span>Cooldown Min {beatCooldownMin.toFixed(3)}</span>
-						<input type="range" min="0.01" max="0.18" step="0.001" bind:value={beatCooldownMin} />
+						<span>Large Burst M {activeBeatConfig.downbeatBurstMobile}</span>
+						<input
+							type="range"
+							min="0"
+							max="120"
+							step="1"
+							value={activeBeatConfig.downbeatBurstMobile}
+							oninput={(e) =>
+								setBeatConfigValue('downbeatBurstMobile', Number(e.currentTarget.value))}
+						/>
 					</label>
 					<label class="tuning-control">
-						<span>Cooldown Max {beatCooldownMax.toFixed(3)}</span>
-						<input type="range" min="0.01" max="0.22" step="0.001" bind:value={beatCooldownMax} />
+						<span>Large Cap D {activeBeatConfig.downbeatBurstMaxDesktop}</span>
+						<input
+							type="range"
+							min="10"
+							max="500"
+							step="1"
+							value={activeBeatConfig.downbeatBurstMaxDesktop}
+							oninput={(e) =>
+								setBeatConfigValue('downbeatBurstMaxDesktop', Number(e.currentTarget.value))}
+						/>
 					</label>
 					<label class="tuning-control">
-						<span>Base D {beatBurstBaseDesktop}</span>
-						<input type="range" min="0" max="120" step="1" bind:value={beatBurstBaseDesktop} />
+						<span>Large Cap M {activeBeatConfig.downbeatBurstMaxMobile}</span>
+						<input
+							type="range"
+							min="8"
+							max="160"
+							step="1"
+							value={activeBeatConfig.downbeatBurstMaxMobile}
+							oninput={(e) =>
+								setBeatConfigValue('downbeatBurstMaxMobile', Number(e.currentTarget.value))}
+						/>
 					</label>
 					<label class="tuning-control">
-						<span>Base M {beatBurstBaseMobile}</span>
-						<input type="range" min="0" max="32" step="1" bind:value={beatBurstBaseMobile} />
+						<span>Accent Hz Min {activeBeatConfig.accentMinHz}</span>
+						<input
+							type="range"
+							min="80"
+							max="4000"
+							step="1"
+							value={activeBeatConfig.accentMinHz}
+							oninput={(e) => setBeatConfigValue('accentMinHz', Number(e.currentTarget.value))}
+						/>
 					</label>
 					<label class="tuning-control">
-						<span>Power D {beatBurstPowerDesktop}</span>
-						<input type="range" min="0" max="90" step="1" bind:value={beatBurstPowerDesktop} />
+						<span>Accent Hz Max {activeBeatConfig.accentMaxHz}</span>
+						<input
+							type="range"
+							min="120"
+							max="9000"
+							step="1"
+							value={activeBeatConfig.accentMaxHz}
+							oninput={(e) => setBeatConfigValue('accentMaxHz', Number(e.currentTarget.value))}
+						/>
 					</label>
 					<label class="tuning-control">
-						<span>Power M {beatBurstPowerMobile}</span>
-						<input type="range" min="0" max="64" step="1" bind:value={beatBurstPowerMobile} />
+						<span>Accent Threshold {activeBeatConfig.accentThreshold.toFixed(2)}</span>
+						<input
+							type="range"
+							min="1.05"
+							max="4"
+							step="0.01"
+							value={activeBeatConfig.accentThreshold}
+							oninput={(e) => setBeatConfigValue('accentThreshold', Number(e.currentTarget.value))}
+						/>
 					</label>
 					<label class="tuning-control">
-						<span>Presence D {beatBurstPresenceBonusDesktop}</span>
+						<span>Accent Gate {activeBeatConfig.accentMinEnergy.toFixed(3)}</span>
+						<input
+							type="range"
+							min="0.005"
+							max="0.6"
+							step="0.001"
+							value={activeBeatConfig.accentMinEnergy}
+							oninput={(e) => setBeatConfigValue('accentMinEnergy', Number(e.currentTarget.value))}
+						/>
+					</label>
+					<label class="tuning-control">
+						<span>Small Burst D {activeBeatConfig.accentBurstDesktop}</span>
+						<input
+							type="range"
+							min="0"
+							max="320"
+							step="1"
+							value={activeBeatConfig.accentBurstDesktop}
+							oninput={(e) =>
+								setBeatConfigValue('accentBurstDesktop', Number(e.currentTarget.value))}
+						/>
+					</label>
+					<label class="tuning-control">
+						<span>Small Burst M {activeBeatConfig.accentBurstMobile}</span>
 						<input
 							type="range"
 							min="0"
 							max="100"
 							step="1"
-							bind:value={beatBurstPresenceBonusDesktop}
+							value={activeBeatConfig.accentBurstMobile}
+							oninput={(e) =>
+								setBeatConfigValue('accentBurstMobile', Number(e.currentTarget.value))}
 						/>
 					</label>
 					<label class="tuning-control">
-						<span>Presence M {beatBurstPresenceBonusMobile}</span>
+						<span>Small Cap D {activeBeatConfig.accentBurstMaxDesktop}</span>
+						<input
+							type="range"
+							min="10"
+							max="420"
+							step="1"
+							value={activeBeatConfig.accentBurstMaxDesktop}
+							oninput={(e) =>
+								setBeatConfigValue('accentBurstMaxDesktop', Number(e.currentTarget.value))}
+						/>
+					</label>
+					<label class="tuning-control">
+						<span>Small Cap M {activeBeatConfig.accentBurstMaxMobile}</span>
+						<input
+							type="range"
+							min="8"
+							max="140"
+							step="1"
+							value={activeBeatConfig.accentBurstMaxMobile}
+							oninput={(e) =>
+								setBeatConfigValue('accentBurstMaxMobile', Number(e.currentTarget.value))}
+						/>
+					</label>
+					<label class="tuning-control">
+						<span>BPM Min {activeBeatConfig.bpmMin}</span>
+						<input
+							type="range"
+							min="40"
+							max="140"
+							step="1"
+							value={activeBeatConfig.bpmMin}
+							oninput={(e) => setBeatConfigValue('bpmMin', Number(e.currentTarget.value))}
+						/>
+					</label>
+					<label class="tuning-control">
+						<span>BPM Max {activeBeatConfig.bpmMax}</span>
+						<input
+							type="range"
+							min="120"
+							max="260"
+							step="1"
+							value={activeBeatConfig.bpmMax}
+							oninput={(e) => setBeatConfigValue('bpmMax', Number(e.currentTarget.value))}
+						/>
+					</label>
+					<label class="tuning-control">
+						<span>Target BPM {activeBeatConfig.targetBpm || 'auto'}</span>
 						<input
 							type="range"
 							min="0"
-							max="18"
+							max="220"
 							step="1"
-							bind:value={beatBurstPresenceBonusMobile}
+							value={activeBeatConfig.targetBpm}
+							oninput={(e) => setBeatConfigValue('targetBpm', Number(e.currentTarget.value))}
 						/>
 					</label>
 					<label class="tuning-control">
-						<span>Max D {beatBurstMaxDesktop}</span>
-						<input type="range" min="10" max="240" step="1" bind:value={beatBurstMaxDesktop} />
+						<span>BPM Tolerance {activeBeatConfig.bpmTimingTolerance.toFixed(2)}</span>
+						<input
+							type="range"
+							min="0"
+							max="0.5"
+							step="0.01"
+							value={activeBeatConfig.bpmTimingTolerance}
+							oninput={(e) =>
+								setBeatConfigValue('bpmTimingTolerance', Number(e.currentTarget.value))}
+						/>
 					</label>
 					<label class="tuning-control">
-						<span>Max M {beatBurstMaxMobile}</span>
-						<input type="range" min="8" max="240" step="1" bind:value={beatBurstMaxMobile} />
+						<span>BPM Lock {activeBeatConfig.bpmLockStrength.toFixed(2)}</span>
+						<input
+							type="range"
+							min="0"
+							max="1"
+							step="0.01"
+							value={activeBeatConfig.bpmLockStrength}
+							oninput={(e) => setBeatConfigValue('bpmLockStrength', Number(e.currentTarget.value))}
+						/>
 					</label>
 				</div>
+				<div class="tuning-actions">
+					<button class="tuning-reset" type="button" onclick={clearLocalBeatOverride}
+						>Clear Local</button
+					>
+				</div>
+				<label class="tuning-control export-control">
+					<span>Copy to tracks.ts</span>
+					<textarea readonly value={beatConfigExport}></textarea>
+				</label>
 			</div>
 		{/if}
 	</div>
@@ -1085,6 +1402,27 @@
 	.tuning-control input {
 		width: 100%;
 		accent-color: #9cdcff;
+	}
+	.tuning-actions {
+		display: flex;
+		justify-content: flex-end;
+		padding-top: 2px;
+	}
+	.export-control textarea {
+		width: 100%;
+		min-height: 92px;
+		resize: vertical;
+		border: 1px solid rgba(255, 255, 255, 0.18);
+		border-radius: 7px;
+		background: rgba(0, 0, 0, 0.22);
+		color: rgba(255, 255, 255, 0.82);
+		font:
+			10px/1.35 ui-monospace,
+			SFMono-Regular,
+			Menlo,
+			Monaco,
+			Consolas,
+			monospace;
 	}
 	.tuning-toggle,
 	.tuning-reset {
