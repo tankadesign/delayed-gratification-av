@@ -1,21 +1,27 @@
 <script lang="ts">
 	import TrackComponent from '$lib/components/Track.svelte';
-	import { evaluateBeatBand, resolveEffectiveBpm } from '$lib/beat-detector';
 	import { store } from '$lib/store.svelte';
-	import { defaultBeatConfig, tracks } from '$lib/tracks';
-	import type { BeatConfig, Track, TrackAudio } from '$lib/types';
+	import { tracks } from '$lib/tracks';
+	import type { Track, TrackAudio } from '$lib/types';
 	import { onDestroy, onMount } from 'svelte';
 	import {
 		AdditiveBlending,
+		BufferAttribute,
+		BufferGeometry,
+		Color,
 		CylinderGeometry,
+		DynamicDrawUsage,
 		Fog,
 		Group,
 		MathUtils,
 		Mesh,
 		MeshBasicMaterial,
 		PerspectiveCamera,
+		Points,
 		Scene,
+		ShaderMaterial,
 		SphereGeometry,
+		Vector3,
 		WebGLRenderer
 	} from 'three';
 	import { BokehPass } from 'three/examples/jsm/postprocessing/BokehPass.js';
@@ -37,24 +43,22 @@
 		shellMaterial: MeshBasicMaterial;
 		coreMaterial: MeshBasicMaterial;
 		tipMaterial: MeshBasicMaterial;
+		spectrumT: number;
+		currentHalfLength: number;
+		currentColor: Color;
 	}
 
-	interface SphereParticle {
-		mesh: Mesh;
-		material: MeshBasicMaterial;
-		isLarge: boolean;
-		targetOpacity: number;
-		baseScale: number;
-		velocityX: number;
-		velocityY: number;
-		velocityZ: number;
-		accelerationX: number;
-		accelerationY: number;
-		accelerationZ: number;
-		growDuration: number;
+	interface FloatParticle {
+		active: boolean;
 		life: number;
 		maxLife: number;
-		active: boolean;
+		startX: number;
+		startY: number;
+		startZ: number;
+		driftX: number;
+		driftZ: number;
+		lift: number;
+		size: number;
 	}
 
 	interface SceneEnergy {
@@ -77,20 +81,30 @@
 	let innerWidth = $state(typeof window === 'undefined' ? 393 : window.innerWidth);
 	let innerHeight = $state(typeof window === 'undefined' ? 660 : window.innerHeight);
 
+	let bokehPass = $state<BokehPass | null>(null);
+
 	let renderer: WebGLRenderer | null = null;
 	let scene: Scene | null = null;
 	let camera: PerspectiveCamera | null = null;
 	let composer: EffectComposer | null = null;
-	let bokehPass: BokehPass | null = null;
 	let groundGroup: Group | null = null;
-	let particleGroup: Group | null = null;
+	let cameraTarget = new Vector3(0, -3.4, -45);
+	let cameraOrigin = $state({ x: -17, y: 1, z: 10.5 });
+	let cameraTargetPosition = $state({ x: -6, y: 0, z: -15 });
+	let particleLayer: Points | null = null;
+	let particleGeometry: BufferGeometry | null = null;
+	let particleMaterial: ShaderMaterial | null = null;
+	let particlePositions: Float32Array | null = null;
+	let particleColors: Float32Array | null = null;
+	let particleAlphas: Float32Array | null = null;
+	let particleSizes: Float32Array | null = null;
+	let floatParticles: FloatParticle[] = [];
+	let nextParticleIndex = 0;
+	let lastParticleBeatIndex = -1;
 	let lineShellGeometry: CylinderGeometry | null = null;
 	let lineCoreGeometry: CylinderGeometry | null = null;
 	let lineTipGeometry: SphereGeometry | null = null;
-	let sphereGeometry: SphereGeometry | null = null;
-	let sphereGeometryLarge: SphereGeometry | null = null;
 	let lines: LineNode[] = [];
-	let particles: SphereParticle[] = [];
 	let animationFrameId = 0;
 	let previousFrameTime = 0;
 	let hasConnectedAnalyserOutput = false;
@@ -98,37 +112,35 @@
 	let smoothedMid = 0;
 	let smoothedHigh = 0;
 	let smoothedTransient = 0;
-	let downbeatAverage = 0;
-	let accentAverage = 0;
-	let downbeatCutoff = $state(0);
-	let accentCutoff = 0;
-	let lastDownbeatHitTime = 0;
-	let lastAccentHitTime = 0;
-	let estimatedBpm = 0;
 	let scenePulse = 0;
-	let showTuningPanel = $state(true);
-	let activeBeatConfig = $state<BeatConfig>({ ...defaultBeatConfig });
-	let debugDownbeatDetected = $state(false);
-	let debugAccentDetected = $state(false);
-	let debugDownbeatEnergy = $state(0);
-	let debugAccentEnergy = $state(0);
-	let debugLargeSpawn = $state(0);
-	let debugSmallSpawn = $state(0);
-	let debugBpm = $state(0);
-	let beatConfigExport = $state('');
+	let particleMinPerLine = $state(2);
+	let particleMaxPerLine = $state(50);
+	let particleEndpointBias = $state(0.92);
+	let showParticleTuning = $state(true);
+	let enableBokeh = $state(false);
 
 	const lineGhostDecayDesktop = 0.992;
 	const lineGhostDecayMobile = 0.988;
-	// Particle pool size (upper bound of concurrently active particles). Increase if bursts hit a ceiling.
-	const maxParticlesDesktop = 500;
-	const maxParticlesMobile = 55;
 	const lineCountDesktop = 60;
 	const lineCountMobile = 26;
-	const localBeatConfigPrefix = 'delayed-gratification-av:v2:beat-config:';
-	const downbeatCutoffDecayPerSecond = 1.7;
-	const accentCutoffDecayPerSecond = 2.4;
+	const maxFloatParticlesDesktop = 18000;
+	const maxFloatParticlesMobile = 6000;
+	const cameraLoopSeconds = 24;
+	const cameraKeyboardStep = 0.25;
 
 	let isMobile = $derived(innerWidth < 560);
+
+	$effect(() => {
+		if (bokehPass) {
+			if (enableBokeh) {
+				composer?.addPass(bokehPass);
+				console.log('bokeh enabled');
+			} else {
+				composer?.removePass(bokehPass);
+				console.log('bokeh removed');
+			}
+		}
+	});
 
 	function getPixelRatio() {
 		const dpr = typeof window === 'undefined' ? 1 : window.devicePixelRatio;
@@ -148,7 +160,7 @@
 		const verticalFov = MathUtils.degToRad(camera.fov);
 		const depth = Math.abs(camera.position.z - worldZ);
 		const worldHeight = 2 * Math.tan(verticalFov / 2) * depth;
-		return worldHeight * camera.aspect * 6.5;
+		return worldHeight * camera.aspect * 4.8;
 	}
 
 	function averageRange(startRatio: number, endRatio: number) {
@@ -186,122 +198,14 @@
 		return count ? total / (count * 255) : 0;
 	}
 
-	function normalizeBeatConfig(config?: Partial<BeatConfig>): BeatConfig {
-		return {
-			...defaultBeatConfig,
-			...(config ?? {})
-		};
-	}
-
-	function getTrackBeatDefaults(track?: Track | null) {
-		return normalizeBeatConfig(track?.beatConfig);
-	}
-
-	function getBeatConfigStorageKey(track?: Track | null) {
-		return track ? `${localBeatConfigPrefix}${track.id}` : '';
-	}
-
-	function readStoredBeatConfig(track?: Track | null) {
-		if (typeof localStorage === 'undefined' || !track) return null;
-		const rawConfig = localStorage.getItem(getBeatConfigStorageKey(track));
-		if (!rawConfig) return null;
-		try {
-			return normalizeBeatConfig(JSON.parse(rawConfig) as Partial<BeatConfig>);
-		} catch {
-			return null;
-		}
-	}
-
-	function updateBeatConfigExport() {
-		beatConfigExport = JSON.stringify(activeBeatConfig, null, 2);
-	}
-
-	function resetBeatDetectorState() {
-		downbeatAverage = 0;
-		accentAverage = 0;
-		downbeatCutoff = activeBeatConfig.downbeatMinEnergy;
-		accentCutoff = activeBeatConfig.accentMinEnergy;
-		lastDownbeatHitTime = 0;
-		lastAccentHitTime = 0;
-		estimatedBpm = 0;
-		debugDownbeatDetected = false;
-		debugAccentDetected = false;
-		debugLargeSpawn = 0;
-		debugSmallSpawn = 0;
-		debugBpm = 0;
-	}
-
-	function loadBeatConfigForTrack(track?: Track | null) {
-		activeBeatConfig = readStoredBeatConfig(track) ?? getTrackBeatDefaults(track);
-		resetBeatDetectorState();
-		updateBeatConfigExport();
-	}
-
-	function saveCurrentBeatConfig() {
-		if (typeof localStorage !== 'undefined' && currentTrack) {
-			localStorage.setItem(getBeatConfigStorageKey(currentTrack), JSON.stringify(activeBeatConfig));
-		}
-		updateBeatConfigExport();
-	}
-
-	function setBeatConfigValue(key: keyof BeatConfig, value: number) {
-		activeBeatConfig = {
-			...activeBeatConfig,
-			[key]: value
-		};
-		saveCurrentBeatConfig();
-	}
-
-	function resetBeatTuning() {
-		activeBeatConfig = getTrackBeatDefaults(currentTrack);
-		saveCurrentBeatConfig();
-		resetBeatDetectorState();
-	}
-
-	function clearLocalBeatOverride() {
-		if (typeof localStorage !== 'undefined' && currentTrack) {
-			localStorage.removeItem(getBeatConfigStorageKey(currentTrack));
-		}
-		activeBeatConfig = getTrackBeatDefaults(currentTrack);
-		resetBeatDetectorState();
-		updateBeatConfigExport();
-	}
-
-	function isNearBpmGrid(nowSeconds: number, lastHitSeconds: number) {
-		const effectiveBpm = resolveEffectiveBpm(activeBeatConfig.targetBpm, estimatedBpm);
-		if (!effectiveBpm || !lastHitSeconds || activeBeatConfig.bpmLockStrength <= 0) return true;
-		const beatSeconds = 60 / effectiveBpm;
-		const sinceLast = nowSeconds - lastHitSeconds;
-		if (sinceLast <= 0) return false;
-		const nearestBeat = Math.max(1, Math.round(sinceLast / beatSeconds));
-		const distance = Math.abs(sinceLast - nearestBeat * beatSeconds);
-		const toleranceSeconds = beatSeconds * activeBeatConfig.bpmTimingTolerance;
-		const lockAllowance = MathUtils.lerp(
-			beatSeconds,
-			toleranceSeconds,
-			activeBeatConfig.bpmLockStrength
-		);
-		return distance <= lockAllowance;
-	}
-
-	function updateEstimatedBpm(nowSeconds: number) {
-		if (activeBeatConfig.targetBpm > 0) {
-			estimatedBpm = activeBeatConfig.targetBpm;
-			debugBpm = activeBeatConfig.targetBpm;
-			lastDownbeatHitTime = nowSeconds;
-			return;
-		}
-		if (!lastDownbeatHitTime) {
-			lastDownbeatHitTime = nowSeconds;
-			return;
-		}
-		const interval = nowSeconds - lastDownbeatHitTime;
-		lastDownbeatHitTime = nowSeconds;
-		if (interval <= 0) return;
-		const candidateBpm = 60 / interval;
-		if (candidateBpm < activeBeatConfig.bpmMin || candidateBpm > activeBeatConfig.bpmMax) return;
-		estimatedBpm = estimatedBpm ? MathUtils.lerp(estimatedBpm, candidateBpm, 0.28) : candidateBpm;
-		debugBpm = estimatedBpm;
+	function sampleLineGradient(t: number, stops: string[], pulse: number) {
+		const colorStops = stops.length
+			? stops.map((stop) => new Color(stop))
+			: [new Color('#ff184c'), new Color('#1887ff')];
+		const scaled = MathUtils.clamp(t, 0, 1) * (colorStops.length - 1);
+		const index = Math.min(colorStops.length - 2, Math.floor(scaled));
+		const color = colorStops[index].clone().lerp(colorStops[index + 1], scaled - index);
+		return color.lerp(new Color('#ffffff'), pulse * 0.1);
 	}
 
 	function readSceneEnergy(delta: number): SceneEnergy {
@@ -360,8 +264,9 @@
 
 		for (let i = 0; i < count; i++) {
 			const depthT = count <= 1 ? 0 : i / (count - 1);
-			const z = MathUtils.lerp(6, -90, depthT);
-			const y = MathUtils.lerp(-8.8, 1.8, depthT);
+			const spectrumT = Math.abs(depthT * 2 - 1);
+			const z = MathUtils.lerp(0, -90, depthT);
+			const y = MathUtils.lerp(-7.2, 1.8, depthT);
 
 			const group = new Group();
 			group.position.set(0, y, z);
@@ -420,53 +325,10 @@
 				tipRight,
 				shellMaterial,
 				coreMaterial,
-				tipMaterial
-			});
-		}
-	}
-
-	function setupSpherePool() {
-		if (!scene) return;
-
-		for (const particle of particles) {
-			scene.remove(particle.mesh);
-			particle.material.dispose();
-		}
-		particles = [];
-
-		sphereGeometry?.dispose();
-		sphereGeometry = new SphereGeometry(isMobile ? 0.34 : 0.5, 18, 12);
-		sphereGeometryLarge?.dispose();
-		sphereGeometryLarge = new SphereGeometry(isMobile ? 0.34 : 0.5, 36, 24);
-
-		const count = isMobile ? maxParticlesMobile : maxParticlesDesktop;
-		for (let i = 0; i < count; i++) {
-			const material = new MeshBasicMaterial({
-				color: 0xffffff,
-				transparent: true,
-				opacity: 0,
-				blending: AdditiveBlending,
-				depthWrite: false
-			});
-			const mesh = new Mesh(sphereGeometry, material);
-			mesh.visible = false;
-			particleGroup.add(mesh);
-			particles.push({
-				mesh,
-				material,
-				isLarge: false,
-				targetOpacity: 0,
-				baseScale: 1,
-				velocityX: 0,
-				velocityY: 0,
-				velocityZ: 0,
-				accelerationX: 0,
-				accelerationY: 0,
-				accelerationZ: 0,
-				growDuration: 0,
-				life: 0,
-				maxLife: 0,
-				active: false
+				tipMaterial,
+				spectrumT,
+				currentHalfLength: 0,
+				currentColor: new Color(0xffffff)
 			});
 		}
 	}
@@ -479,6 +341,255 @@
 		camera.aspect = width / height;
 		camera.updateProjectionMatrix();
 		composer?.setSize(width, height);
+		if (particleMaterial) {
+			particleMaterial.uniforms.pixelRatio.value = getPixelRatio();
+		}
+	}
+
+	function setupFloatParticles() {
+		if (!scene) return;
+
+		if (particleLayer) {
+			scene.remove(particleLayer);
+		}
+		particleGeometry?.dispose();
+		particleMaterial?.dispose();
+
+		const count = isMobile ? maxFloatParticlesMobile : maxFloatParticlesDesktop;
+		particlePositions = new Float32Array(count * 3);
+		particleColors = new Float32Array(count * 3);
+		particleAlphas = new Float32Array(count);
+		particleSizes = new Float32Array(count);
+		floatParticles = Array.from({ length: count }, () => ({
+			active: false,
+			life: 0,
+			maxLife: 0,
+			startX: 0,
+			startY: 0,
+			startZ: 0,
+			driftX: 0,
+			driftZ: 0,
+			lift: 0,
+			size: 0
+		}));
+
+		particleGeometry = new BufferGeometry();
+		const positionAttribute = new BufferAttribute(particlePositions, 3);
+		const colorAttribute = new BufferAttribute(particleColors, 3);
+		const alphaAttribute = new BufferAttribute(particleAlphas, 1);
+		const sizeAttribute = new BufferAttribute(particleSizes, 1);
+		positionAttribute.setUsage(DynamicDrawUsage);
+		colorAttribute.setUsage(DynamicDrawUsage);
+		alphaAttribute.setUsage(DynamicDrawUsage);
+		sizeAttribute.setUsage(DynamicDrawUsage);
+		particleGeometry.setAttribute('position', positionAttribute);
+		particleGeometry.setAttribute('color', colorAttribute);
+		particleGeometry.setAttribute('alpha', alphaAttribute);
+		particleGeometry.setAttribute('size', sizeAttribute);
+
+		particleMaterial = new ShaderMaterial({
+			transparent: true,
+			depthWrite: false,
+			blending: AdditiveBlending,
+			uniforms: {
+				pixelRatio: { value: getPixelRatio() }
+			},
+			vertexShader: `
+				attribute float alpha;
+				attribute float size;
+				varying vec3 vColor;
+				varying float vAlpha;
+				uniform float pixelRatio;
+
+				void main() {
+					vColor = color;
+					vAlpha = alpha;
+					vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+					gl_PointSize = size * pixelRatio * (70.0 / max(18.0, -mvPosition.z));
+					gl_Position = projectionMatrix * mvPosition;
+				}
+			`,
+			fragmentShader: `
+				varying vec3 vColor;
+				varying float vAlpha;
+
+				void main() {
+					vec2 uv = gl_PointCoord - vec2(0.5);
+					float d = length(uv);
+					float core = smoothstep(0.5, 0.0, d);
+					float glow = smoothstep(0.5, 0.08, d) * 0.28;
+					float alpha = vAlpha * max(core, glow);
+					if (alpha <= 0.01) discard;
+					gl_FragColor = vec4(vColor, alpha);
+				}
+			`,
+			vertexColors: true
+		});
+		particleLayer = new Points(particleGeometry, particleMaterial);
+		particleLayer.frustumCulled = false;
+		scene.add(particleLayer);
+	}
+
+	function updateCameraMotion(now: number) {
+		if (!camera) return;
+		cameraTarget.set(cameraTargetPosition.x, cameraTargetPosition.y, cameraTargetPosition.z);
+		const loopT = (now / 1000 / cameraLoopSeconds) * Math.PI * 2;
+		camera.position.set(
+			cameraOrigin.x,
+			cameraOrigin.y + Math.sin(loopT) * (isMobile ? 0.45 : 1.5),
+			cameraOrigin.z
+		);
+		camera.lookAt(cameraTarget);
+	}
+
+	function formatCameraValue(value: number) {
+		return Number(value.toFixed(2));
+	}
+
+	function formatVectorForCode(name: string, vector: { x: number; y: number; z: number }) {
+		return `${name}.set(${formatCameraValue(vector.x)}, ${formatCameraValue(vector.y)}, ${formatCameraValue(vector.z)})`;
+	}
+
+	function moveCameraControl(event: KeyboardEvent) {
+		if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+		if (event.metaKey || event.ctrlKey) return;
+
+		event.preventDefault();
+		const direction =
+			event.key === 'ArrowLeft' || event.key === 'ArrowDown'
+				? -cameraKeyboardStep
+				: cameraKeyboardStep;
+		const target = event.shiftKey ? cameraTargetPosition : cameraOrigin;
+		const next = { ...target };
+
+		if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+			next.x = formatCameraValue(next.x + direction);
+		} else if (event.altKey) {
+			next.z = formatCameraValue(next.z + direction);
+		} else {
+			next.y = formatCameraValue(next.y + direction);
+		}
+
+		if (event.shiftKey) {
+			cameraTargetPosition = next;
+		} else {
+			cameraOrigin = next;
+		}
+	}
+
+	function endpointSide() {
+		return Math.random() < 0.5 ? -1 : 1;
+	}
+
+	function activateFloatParticle(line: LineNode, side: number) {
+		if (
+			!particlePositions ||
+			!particleColors ||
+			!particleAlphas ||
+			!particleSizes ||
+			!floatParticles.length
+		) {
+			return;
+		}
+
+		const particle = floatParticles[nextParticleIndex];
+		const index = nextParticleIndex;
+		nextParticleIndex = (nextParticleIndex + 1) % floatParticles.length;
+		const tipWorldPosition = new Vector3();
+		const tip = side < 0 ? line.tipLeft : line.tipRight;
+		tip.getWorldPosition(tipWorldPosition);
+		const inwardJitter = Math.pow(Math.random(), MathUtils.lerp(10, 30, particleEndpointBias));
+		const x = tipWorldPosition.x - side * line.currentHalfLength * 0.055 * inwardJitter;
+		const y = tipWorldPosition.y + MathUtils.lerp(0.01, 0.08, Math.random());
+		const z = tipWorldPosition.z + MathUtils.lerp(-0.045, 0.045, Math.random());
+
+		particle.active = true;
+		particle.life = 0;
+		particle.maxLife = MathUtils.lerp(5, 10, Math.random());
+		particle.startX = x;
+		particle.startY = y;
+		particle.startZ = z;
+		const endpointStrength = MathUtils.lerp(0.9, 1, particleEndpointBias);
+		const outwardDrift = side * MathUtils.lerp(1.45, 2.45, endpointStrength);
+		const randomDrift = MathUtils.lerp(-0.14, 0.14, Math.random());
+		particle.driftX = randomDrift + outwardDrift * MathUtils.lerp(0.35, 1, particleEndpointBias);
+		particle.driftZ = MathUtils.lerp(-0.45, 0.2, Math.random());
+		particle.lift = MathUtils.lerp(0.8, 2.8, Math.random()) * MathUtils.lerp(1, 8, line.depthT);
+		particle.size = MathUtils.lerp(isMobile ? 1.8 : 2.2, isMobile ? 4.4 : 5.8, Math.random());
+
+		const offset3 = index * 3;
+		particlePositions[offset3] = x;
+		particlePositions[offset3 + 1] = y;
+		particlePositions[offset3 + 2] = z;
+		particleColors[offset3] = line.currentColor.r;
+		particleColors[offset3 + 1] = line.currentColor.g;
+		particleColors[offset3 + 2] = line.currentColor.b;
+		particleAlphas[index] = 0.35;
+		particleSizes[index] = particle.size;
+	}
+
+	function emitLineParticles() {
+		if (!lines.length || !currentTrack?.bpm || !music || music.paused) return;
+		const beatSeconds = 60 / currentTrack.bpm;
+		const beatIndex = Math.floor(music.currentTime / beatSeconds);
+		if (beatIndex === lastParticleBeatIndex) return;
+		lastParticleBeatIndex = beatIndex;
+
+		const minCount = Math.max(0, Math.floor(Math.min(particleMinPerLine, particleMaxPerLine)));
+		const maxCount = Math.max(
+			minCount,
+			Math.floor(Math.max(particleMinPerLine, particleMaxPerLine))
+		);
+
+		for (const line of lines) {
+			if (line.currentHalfLength <= 0.001) continue;
+			const count = MathUtils.randInt(minCount, maxCount);
+			for (let i = 0; i < count; i++) {
+				activateFloatParticle(line, endpointSide());
+			}
+		}
+	}
+
+	function updateFloatParticles(delta: number) {
+		if (
+			!particleGeometry ||
+			!particlePositions ||
+			!particleAlphas ||
+			!particleSizes ||
+			!floatParticles.length
+		) {
+			return;
+		}
+
+		for (let i = 0; i < floatParticles.length; i++) {
+			const particle = floatParticles[i];
+			if (!particle.active) continue;
+			particle.life += delta;
+			const offset3 = i * 3;
+			if (particle.life >= particle.maxLife) {
+				particle.active = false;
+				particleAlphas[i] = 0;
+				particleSizes[i] = 0;
+				continue;
+			}
+
+			const lifeT = particle.life / particle.maxLife;
+			const cubicLift = lifeT * lifeT * lifeT;
+			const driftEase = 1 - Math.pow(1 - lifeT, 3);
+			const fadeIn = Math.min(1, lifeT / 0.08);
+			const fadeOut = lifeT < 0.72 ? 1 : 1 - (lifeT - 0.72) / 0.28;
+
+			particlePositions[offset3] = particle.startX + particle.driftX * driftEase;
+			particlePositions[offset3 + 1] = particle.startY + particle.lift * cubicLift;
+			particlePositions[offset3 + 2] = particle.startZ + particle.driftZ * driftEase;
+			particleAlphas[i] = Math.max(0, fadeOut) * fadeIn * 0.38;
+			particleSizes[i] = particle.size * MathUtils.lerp(0.75, 1.18, lifeT);
+		}
+
+		particleGeometry.attributes.position.needsUpdate = true;
+		particleGeometry.attributes.alpha.needsUpdate = true;
+		particleGeometry.attributes.size.needsUpdate = true;
+		particleGeometry.attributes.color.needsUpdate = true;
 	}
 
 	function initThree() {
@@ -499,227 +610,46 @@
 		scene.fog = new Fog('#040612', 18, 120);
 
 		camera = new PerspectiveCamera(44, width / height, 0.1, 220);
-		camera.position.set(0, 7.6, 17);
-		camera.lookAt(0, -3.4, -48);
+		camera.position.set(cameraOrigin.x, cameraOrigin.y, cameraOrigin.z);
 
 		groundGroup = new Group();
 		scene.add(groundGroup);
 
-		particleGroup = new Group();
-		scene.add(particleGroup);
-		particleGroup.position.y = 1;
-
 		setupGroundLines();
-		setupSpherePool();
+		setupFloatParticles();
+		updateCameraMotion(0);
 
 		composer = new EffectComposer(renderer);
 		composer.addPass(new RenderPass(scene, camera));
 		bokehPass = new BokehPass(scene, camera, {
-			focus: isMobile ? 17 : 20,
-			aperture: isMobile ? 0.00012 : 0.0002,
-			maxblur: isMobile ? 0.004 : 0.006
+			focus: 2,
+			aperture: 0.00025,
+			maxblur: 0.01
 		});
-		composer.addPass(bokehPass);
+		if (enableBokeh) {
+			composer.addPass(bokehPass);
+		}
 
 		window.addEventListener('resize', onResize);
-	}
-
-	function activateParticle(energy: SceneEnergy, size: 'large' | 'small') {
-		const particle = particles.find((entry) => !entry.active);
-		if (!particle) return;
-
-		const hueBase = currentTrack?.hue ?? 260;
-		const hue = ((hueBase - 10 + Math.random() * 135) % 360) / 360;
-		particle.material.color.setHSL(hue, 0.85, 0.62);
-		particle.material.opacity = 0;
-		const startZ = -8.5 + Math.random() * 6;
-		const spawnWidth = getViewportWidthAtZ(startZ) * 1.2;
-		const startX = (Math.random() - 0.5) * spawnWidth;
-		const xAccelScale = MathUtils.lerp(0.35, 0.85, Math.random());
-		const yAccelScale = MathUtils.lerp(0.75, 0.85, Math.random());
-		const zAccelScale = MathUtils.lerp(2, 8.0, Math.random());
-
-		particle.mesh.position.set(startX, -4.9 + Math.random() * 0.9, startZ);
-		const smallBias = Math.pow(Math.random(), 2.6);
-		const mostlySmallScale = MathUtils.lerp(0.14, isMobile ? 0.8 : 1.16, smallBias);
-		const spawnLarge = size === 'large';
-		const largeScale = MathUtils.lerp(
-			isMobile ? 1.35 : 2.1,
-			isMobile ? 2.7 : 4.2,
-			Math.pow(Math.random(), 0.65)
-		);
-		particle.isLarge = spawnLarge;
-		if (sphereGeometry && sphereGeometryLarge) {
-			particle.mesh.geometry = spawnLarge ? sphereGeometryLarge : sphereGeometry;
-		}
-		particle.baseScale = spawnLarge ? largeScale : mostlySmallScale;
-		particle.mesh.scale.setScalar(0.001);
-
-		particle.targetOpacity = 0.5 + Math.random() * 0.35 + energy.transient * 0.2;
-		particle.velocityX = 0;
-		particle.velocityZ = -(0.15 + Math.random() * 0.45 + energy.bass * 0.4);
-		particle.velocityY = 0.05 + Math.random() * 0.14 + energy.mid * 0.2;
-		particle.accelerationX =
-			-Math.sign(startX || 1) * (0.08 + Math.abs(startX) * 0.04) * xAccelScale;
-		particle.accelerationZ =
-			-(7 + Math.random() * 10 + energy.transient * 18 + (spawnLarge ? 5 : 0)) * zAccelScale;
-		particle.accelerationY =
-			(0.45 + Math.random() * 0.9 + energy.mid * 1.2 + (spawnLarge ? 0.18 : 0)) * yAccelScale;
-		particle.growDuration = MathUtils.lerp(0.12, 0.24, Math.random());
-		particle.life = 0;
-		particle.maxLife = 1.6 + Math.random() * 1.1;
-		particle.active = true;
-		particle.mesh.visible = true;
-	}
-
-	function updateParticles(delta: number, energy: SceneEnergy) {
-		const nowSeconds = music?.currentTime ?? performance.now() / 1000;
-		const downbeatEnergy = averageFrequencyBand(
-			Math.min(activeBeatConfig.downbeatMinHz, activeBeatConfig.downbeatMaxHz),
-			Math.max(activeBeatConfig.downbeatMinHz, activeBeatConfig.downbeatMaxHz)
-		);
-		const accentEnergy = averageFrequencyBand(
-			Math.min(activeBeatConfig.accentMinHz, activeBeatConfig.accentMaxHz),
-			Math.max(activeBeatConfig.accentMinHz, activeBeatConfig.accentMaxHz)
-		);
-		const averageSmoothing = Math.min(1, delta * 1.8);
-		downbeatAverage = downbeatAverage
-			? MathUtils.lerp(downbeatAverage, downbeatEnergy, averageSmoothing)
-			: downbeatEnergy;
-		accentAverage = accentAverage
-			? MathUtils.lerp(accentAverage, accentEnergy, averageSmoothing)
-			: accentEnergy;
-
-		const effectiveBpm = resolveEffectiveBpm(activeBeatConfig.targetBpm, estimatedBpm);
-		const downbeatIntervalSeconds = effectiveBpm
-			? (60 / effectiveBpm) * 0.62
-			: 60 / activeBeatConfig.bpmMax;
-		const downbeatResult = evaluateBeatBand({
-			energy: downbeatEnergy,
-			cutoff: downbeatCutoff,
-			minEnergy: activeBeatConfig.downbeatMinEnergy,
-			threshold: activeBeatConfig.downbeatThreshold,
-			decayPerSecond: downbeatCutoffDecayPerSecond,
-			delta,
-			nowSeconds,
-			lastHitSeconds: lastDownbeatHitTime,
-			minIntervalSeconds: downbeatIntervalSeconds
-		});
-		const accentResult = evaluateBeatBand({
-			energy: accentEnergy,
-			cutoff: accentCutoff,
-			minEnergy: activeBeatConfig.accentMinEnergy,
-			threshold: activeBeatConfig.accentThreshold,
-			decayPerSecond: accentCutoffDecayPerSecond,
-			delta,
-			nowSeconds,
-			lastHitSeconds: lastAccentHitTime,
-			minIntervalSeconds: 0.095
-		});
-		downbeatCutoff = downbeatResult.cutoff;
-		accentCutoff = accentResult.cutoff;
-		const downbeatDetected =
-			downbeatResult.detected && isNearBpmGrid(nowSeconds, lastDownbeatHitTime);
-		const accentDetected = accentResult.detected && isNearBpmGrid(nowSeconds, lastDownbeatHitTime);
-
-		let largeSpawn = 0;
-		let smallSpawn = 0;
-		if (downbeatDetected) {
-			const downbeatStrength = Math.min(
-				2.5,
-				downbeatEnergy / Math.max(0.001, activeBeatConfig.downbeatMinEnergy)
-			);
-			const burst = isMobile
-				? activeBeatConfig.downbeatBurstMobile
-				: activeBeatConfig.downbeatBurstDesktop;
-			const maxBurst = isMobile
-				? activeBeatConfig.downbeatBurstMaxMobile
-				: activeBeatConfig.downbeatBurstMaxDesktop;
-			largeSpawn = Math.min(
-				maxBurst,
-				Math.round(burst * MathUtils.lerp(0.55, 1.35, downbeatStrength / 2.5))
-			);
-			updateEstimatedBpm(nowSeconds);
-		}
-		if (accentDetected) {
-			const accentStrength = Math.min(
-				2.5,
-				accentEnergy / Math.max(0.001, activeBeatConfig.accentMinEnergy)
-			);
-			const burst = isMobile
-				? activeBeatConfig.accentBurstMobile
-				: activeBeatConfig.accentBurstDesktop;
-			const maxBurst = isMobile
-				? activeBeatConfig.accentBurstMaxMobile
-				: activeBeatConfig.accentBurstMaxDesktop;
-			smallSpawn = Math.min(
-				maxBurst,
-				Math.round(burst * MathUtils.lerp(0.45, 1.45, accentStrength / 2.5))
-			);
-			lastAccentHitTime = nowSeconds;
-		}
-
-		debugDownbeatDetected = downbeatDetected;
-		debugAccentDetected = accentDetected;
-		debugDownbeatEnergy = downbeatEnergy;
-		debugAccentEnergy = accentEnergy;
-		debugLargeSpawn = largeSpawn;
-		debugSmallSpawn = smallSpawn;
-		debugBpm = resolveEffectiveBpm(activeBeatConfig.targetBpm, estimatedBpm);
-
-		for (let i = 0; i < largeSpawn; i++) {
-			activateParticle(energy, 'large');
-		}
-		for (let i = 0; i < smallSpawn; i++) {
-			activateParticle(energy, 'small');
-		}
-
-		for (const particle of particles) {
-			if (!particle.active) continue;
-
-			particle.life += delta;
-			if (particle.life >= particle.maxLife || particle.mesh.position.z < -120) {
-				particle.active = false;
-				particle.mesh.visible = false;
-				continue;
-			}
-			const lifeProgress = Math.min(1, particle.life / particle.maxLife);
-			const accelRamp = Math.pow(lifeProgress, 4);
-
-			particle.velocityX += particle.accelerationX * delta * accelRamp;
-			particle.velocityZ += particle.accelerationZ * delta * accelRamp;
-			particle.velocityY += particle.accelerationY * delta * 20 * accelRamp;
-			particle.mesh.position.x += particle.velocityX * delta;
-			particle.mesh.position.z += particle.velocityZ * delta;
-			//particle.mesh.position.y += particle.velocityY * delta;
-
-			const lifeT = particle.life / particle.maxLife;
-			const growT = Math.min(1, particle.life / particle.growDuration);
-			const growEase = growT >= 1 ? 1 : 1 - Math.pow(2, -10 * growT);
-			const fadeOut = lifeT < 0.6 ? 1 : 1 - (lifeT - 0.6) / 0.4;
-			particle.material.opacity = particle.targetOpacity * Math.max(0, fadeOut) * growEase;
-			particle.mesh.scale.setScalar(
-				particle.baseScale * growEase * MathUtils.lerp(1.08, 1.34, lifeT)
-			);
-		}
 	}
 
 	function updateGroundLines(energy: SceneEnergy, time: number) {
 		if (!dataArray || !lines.length) return;
 
-		const hueBase = currentTrack?.hue ?? 260;
+		const gradientStops = currentTrack?.gradientStops ?? ['#ff184c', '#1887ff'];
 		const decay = isMobile ? lineGhostDecayMobile : lineGhostDecayDesktop;
-		const freqStep = Math.max(1, Math.floor(dataArray.length / lines.length));
 
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
-			const bandIndex = lines.length - 1 - i;
-			const sampleStart = bandIndex * freqStep;
+			const centerIndex = Math.round(line.spectrumT * (dataArray.length - 1));
+			const bandRadius = Math.max(1, Math.floor(dataArray.length / Math.max(18, lines.length) / 2));
+			const sampleStart = Math.max(0, centerIndex - bandRadius);
+			const sampleEnd = Math.min(dataArray.length, centerIndex + bandRadius + 1);
 			let sampleTotal = 0;
 			let sampleCount = 0;
 			let samplePeak = 0;
-			for (let j = 0; j < freqStep && sampleStart + j < dataArray.length; j++) {
-				const sample = dataArray[sampleStart + j];
+			for (let j = sampleStart; j < sampleEnd; j++) {
+				const sample = dataArray[j];
 				sampleTotal += sample;
 				samplePeak = Math.max(samplePeak, sample);
 				sampleCount += 1;
@@ -735,7 +665,6 @@
 
 			const nearWeight = 1 - line.depthT;
 			const pulse = scenePulse * Math.pow(nearWeight, 1.3);
-			const shimmer = Math.sin(time * 0.005 + line.depthT * 8) * 0.5 + 0.5;
 			const widthDrive = Math.min(1, reactivePct * 1.05);
 			const activity = Math.min(1, widthDrive * 1.1 + ghostCurve * 0.9 + pulse * 0.35);
 			const viewportWidthAtLine = getViewportWidthAtZ(line.group.position.z);
@@ -755,7 +684,7 @@
 				(viewportWidthAtLine * MathUtils.lerp(0.00022, 0.00078, nearWeight) +
 					MathUtils.lerp(0.005, 0.012, nearWeight)) *
 				activity;
-			const coreRadius = shellRadius * 0.18;
+			const coreRadius = shellRadius * 0.05;
 
 			line.group.position.y = line.baseY + yLift;
 			line.shell.scale.set(
@@ -765,7 +694,7 @@
 			);
 			line.core.scale.set(
 				Math.max(0.001, coreRadius / 0.035),
-				Math.max(0.001, coreHalfWidth),
+				Math.max(0.001, coreHalfWidth * 0.95),
 				Math.max(0.001, coreRadius / 0.035)
 			);
 			const coreHalfLength = coreHalfWidth * 0.5;
@@ -774,23 +703,25 @@
 			line.tipRight.scale.setScalar(Math.max(0.001, tipScale));
 			line.tipLeft.position.set(-coreHalfLength + coreRadius * 0.15, 0, 0);
 			line.tipLeft.scale.setScalar(Math.max(0.001, tipScale));
+			line.currentHalfLength = Math.max(0, coreHalfLength - coreRadius * 0.15);
 
-			const gradientT = 1 - line.depthT;
-			const gradientHue = (((hueBase - 42 + gradientT * 150 + pulse * 35) % 360) + 360) % 360;
+			const gradientT = MathUtils.clamp(
+				line.depthT * 0.82 + line.spectrumT * 0.16 + pulse * 0.08,
+				0,
+				1
+			);
+			const lineColor = sampleLineGradient(gradientT, gradientStops, pulse);
 			const sat = MathUtils.lerp(1, 0.72, line.depthT);
-			const lit = MathUtils.lerp(0.24, 0.92, Math.min(1, reactivePct * 0.7 + pulse * 0.8));
+			const lit = MathUtils.lerp(0.28, 0.92, Math.min(1, reactivePct * 0.7 + pulse * 0.8));
 			const depthLit = MathUtils.lerp(lit, lit * 0.34, line.depthT * 0.8);
+			line.currentColor.copy(lineColor);
 			line.shellMaterial.color.setHSL(
-				((gradientHue + 8) % 360) / 360,
+				(lineColor.getHSL({ h: 0, s: 0, l: 0 }).h + 0.02) % 1,
 				Math.min(0.82, sat * 0.4),
 				Math.min(0.92, depthLit + 0.26)
 			);
-			line.coreMaterial.color.setHSL(gradientHue / 360, sat, depthLit);
-			line.tipMaterial.color.setHSL(
-				((gradientHue + 18 + shimmer * 12) % 360) / 360,
-				Math.min(1, sat * 0.98),
-				Math.min(0.95, depthLit + 0.24 + pulse * 0.14)
-			);
+			line.coreMaterial.color.copy(lineColor);
+			line.tipMaterial.color.copy(lineColor);
 
 			line.shellMaterial.opacity = Math.min(
 				0.42,
@@ -819,17 +750,10 @@
 			store.analyser.getByteFrequencyData(dataArray);
 			const energy = readSceneEnergy(delta);
 			updateGroundLines(energy, now);
-			updateParticles(delta, energy);
-		} else {
-			updateParticles(delta, {
-				bass: 0,
-				mid: 0,
-				high: 0,
-				presence800to2k: 0,
-				intensity: 0,
-				transient: 0
-			});
 		}
+		emitLineParticles();
+		updateFloatParticles(delta);
+		updateCameraMotion(now);
 
 		if (composer) {
 			composer.render(delta);
@@ -858,15 +782,19 @@
 		lineTipGeometry?.dispose();
 		lineTipGeometry = null;
 
-		for (const particle of particles) {
-			particle.material.dispose();
+		if (particleLayer) {
+			scene?.remove(particleLayer);
 		}
-		particles = [];
-
-		sphereGeometry?.dispose();
-		sphereGeometry = null;
-		sphereGeometryLarge?.dispose();
-		sphereGeometryLarge = null;
+		particleLayer = null;
+		particleGeometry?.dispose();
+		particleGeometry = null;
+		particleMaterial?.dispose();
+		particleMaterial = null;
+		particlePositions = null;
+		particleColors = null;
+		particleAlphas = null;
+		particleSizes = null;
+		floatParticles = [];
 
 		composer?.dispose();
 		composer = null;
@@ -881,7 +809,6 @@
 	}
 
 	onMount(() => {
-		loadBeatConfigForTrack(currentTrack);
 		initThree();
 		animationFrameId = requestAnimationFrame(animateFrame);
 	});
@@ -925,7 +852,7 @@
 
 	function onPlayTrack(audio: TrackAudio, track: Track) {
 		currentTrack = track;
-		loadBeatConfigForTrack(track);
+		lastParticleBeatIndex = -1;
 		music?.pause();
 		music = audio.audioEl;
 		audioSource = audio.audioSource;
@@ -946,311 +873,46 @@
 	}
 </script>
 
-<svelte:window bind:innerWidth bind:innerHeight />
+<svelte:window bind:innerWidth bind:innerHeight onkeydown={moveCameraControl} />
 
 <div class="wrap">
-	<div class="beat-debug" aria-hidden="true">
-		<div class="beat-debug-title">Beat Detector</div>
-		<div class="beat-debug-row">
-			<span>Track</span>
-			<span>{currentTrack?.name ?? 'none'}</span>
-		</div>
-		<div class="beat-debug-row">
-			<span>Downbeat</span>
-			<span>{debugDownbeatDetected ? 'hit' : debugDownbeatEnergy.toFixed(3)}</span>
-		</div>
-		<div class="beat-debug-row">
-			<span>Accent</span>
-			<span>{debugAccentDetected ? 'hit' : debugAccentEnergy.toFixed(3)}</span>
-		</div>
-		<div class="beat-debug-row">
-			<span>Spawn L / S</span>
-			<span>{debugLargeSpawn} / {debugSmallSpawn}</span>
-		</div>
-		<div class="beat-debug-row">
-			<span>BPM</span>
-			<span>{debugBpm ? debugBpm.toFixed(1) : '-'}</span>
-		</div>
-		<div class="beat-meter">
-			<div
-				class="beat-meter-fill"
-				style={`width: ${Math.min(100, debugDownbeatEnergy * 100)}%`}
-			></div>
-			<div
-				class="beat-meter-threshold"
-				style={`left: ${Math.min(100, downbeatCutoff * 100)}%`}
-			></div>
-		</div>
-	</div>
-	<div class="tuning-wrap">
+	<div class="particle-tuning">
 		<button
-			class="tuning-toggle"
+			class="particle-tuning-toggle"
 			type="button"
 			onclick={() => {
-				showTuningPanel = !showTuningPanel;
+				showParticleTuning = !showParticleTuning;
 			}}
 		>
-			{showTuningPanel ? 'Hide tune' : 'Tune'}
+			{showParticleTuning ? 'Hide particles' : 'Particles'}
 		</button>
-		{#if showTuningPanel}
-			<div class="tuning-panel">
-				<div class="tuning-header">
-					<span>{currentTrack?.id ?? 'Beat'} Config</span>
-					<button class="tuning-reset" type="button" onclick={resetBeatTuning}>Reset</button>
-				</div>
-				<div class="tuning-grid">
-					<label class="tuning-control">
-						<span>Down Hz Min {activeBeatConfig.downbeatMinHz}</span>
-						<input
-							type="range"
-							min="20"
-							max="420"
-							step="1"
-							value={activeBeatConfig.downbeatMinHz}
-							oninput={(e) => setBeatConfigValue('downbeatMinHz', Number(e.currentTarget.value))}
-						/>
-					</label>
-					<label class="tuning-control">
-						<span>Down Hz Max {activeBeatConfig.downbeatMaxHz}</span>
-						<input
-							type="range"
-							min="40"
-							max="1200"
-							step="1"
-							value={activeBeatConfig.downbeatMaxHz}
-							oninput={(e) => setBeatConfigValue('downbeatMaxHz', Number(e.currentTarget.value))}
-						/>
-					</label>
-					<label class="tuning-control">
-						<span>Down Threshold {activeBeatConfig.downbeatThreshold.toFixed(2)}</span>
-						<input
-							type="range"
-							min="1.05"
-							max="4"
-							step="0.01"
-							value={activeBeatConfig.downbeatThreshold}
-							oninput={(e) =>
-								setBeatConfigValue('downbeatThreshold', Number(e.currentTarget.value))}
-						/>
-					</label>
-					<label class="tuning-control">
-						<span>Down Gate {activeBeatConfig.downbeatMinEnergy.toFixed(3)}</span>
-						<input
-							type="range"
-							min="0.005"
-							max="0.6"
-							step="0.001"
-							value={activeBeatConfig.downbeatMinEnergy}
-							oninput={(e) =>
-								setBeatConfigValue('downbeatMinEnergy', Number(e.currentTarget.value))}
-						/>
-					</label>
-					<label class="tuning-control">
-						<span>Large Burst D {activeBeatConfig.downbeatBurstDesktop}</span>
-						<input
-							type="range"
-							min="0"
-							max="360"
-							step="1"
-							value={activeBeatConfig.downbeatBurstDesktop}
-							oninput={(e) =>
-								setBeatConfigValue('downbeatBurstDesktop', Number(e.currentTarget.value))}
-						/>
-					</label>
-					<label class="tuning-control">
-						<span>Large Burst M {activeBeatConfig.downbeatBurstMobile}</span>
-						<input
-							type="range"
-							min="0"
-							max="120"
-							step="1"
-							value={activeBeatConfig.downbeatBurstMobile}
-							oninput={(e) =>
-								setBeatConfigValue('downbeatBurstMobile', Number(e.currentTarget.value))}
-						/>
-					</label>
-					<label class="tuning-control">
-						<span>Large Cap D {activeBeatConfig.downbeatBurstMaxDesktop}</span>
-						<input
-							type="range"
-							min="10"
-							max="500"
-							step="1"
-							value={activeBeatConfig.downbeatBurstMaxDesktop}
-							oninput={(e) =>
-								setBeatConfigValue('downbeatBurstMaxDesktop', Number(e.currentTarget.value))}
-						/>
-					</label>
-					<label class="tuning-control">
-						<span>Large Cap M {activeBeatConfig.downbeatBurstMaxMobile}</span>
-						<input
-							type="range"
-							min="8"
-							max="160"
-							step="1"
-							value={activeBeatConfig.downbeatBurstMaxMobile}
-							oninput={(e) =>
-								setBeatConfigValue('downbeatBurstMaxMobile', Number(e.currentTarget.value))}
-						/>
-					</label>
-					<label class="tuning-control">
-						<span>Accent Hz Min {activeBeatConfig.accentMinHz}</span>
-						<input
-							type="range"
-							min="80"
-							max="4000"
-							step="1"
-							value={activeBeatConfig.accentMinHz}
-							oninput={(e) => setBeatConfigValue('accentMinHz', Number(e.currentTarget.value))}
-						/>
-					</label>
-					<label class="tuning-control">
-						<span>Accent Hz Max {activeBeatConfig.accentMaxHz}</span>
-						<input
-							type="range"
-							min="120"
-							max="9000"
-							step="1"
-							value={activeBeatConfig.accentMaxHz}
-							oninput={(e) => setBeatConfigValue('accentMaxHz', Number(e.currentTarget.value))}
-						/>
-					</label>
-					<label class="tuning-control">
-						<span>Accent Threshold {activeBeatConfig.accentThreshold.toFixed(2)}</span>
-						<input
-							type="range"
-							min="1.05"
-							max="4"
-							step="0.01"
-							value={activeBeatConfig.accentThreshold}
-							oninput={(e) => setBeatConfigValue('accentThreshold', Number(e.currentTarget.value))}
-						/>
-					</label>
-					<label class="tuning-control">
-						<span>Accent Gate {activeBeatConfig.accentMinEnergy.toFixed(3)}</span>
-						<input
-							type="range"
-							min="0.005"
-							max="0.6"
-							step="0.001"
-							value={activeBeatConfig.accentMinEnergy}
-							oninput={(e) => setBeatConfigValue('accentMinEnergy', Number(e.currentTarget.value))}
-						/>
-					</label>
-					<label class="tuning-control">
-						<span>Small Burst D {activeBeatConfig.accentBurstDesktop}</span>
-						<input
-							type="range"
-							min="0"
-							max="320"
-							step="1"
-							value={activeBeatConfig.accentBurstDesktop}
-							oninput={(e) =>
-								setBeatConfigValue('accentBurstDesktop', Number(e.currentTarget.value))}
-						/>
-					</label>
-					<label class="tuning-control">
-						<span>Small Burst M {activeBeatConfig.accentBurstMobile}</span>
-						<input
-							type="range"
-							min="0"
-							max="100"
-							step="1"
-							value={activeBeatConfig.accentBurstMobile}
-							oninput={(e) =>
-								setBeatConfigValue('accentBurstMobile', Number(e.currentTarget.value))}
-						/>
-					</label>
-					<label class="tuning-control">
-						<span>Small Cap D {activeBeatConfig.accentBurstMaxDesktop}</span>
-						<input
-							type="range"
-							min="10"
-							max="420"
-							step="1"
-							value={activeBeatConfig.accentBurstMaxDesktop}
-							oninput={(e) =>
-								setBeatConfigValue('accentBurstMaxDesktop', Number(e.currentTarget.value))}
-						/>
-					</label>
-					<label class="tuning-control">
-						<span>Small Cap M {activeBeatConfig.accentBurstMaxMobile}</span>
-						<input
-							type="range"
-							min="8"
-							max="140"
-							step="1"
-							value={activeBeatConfig.accentBurstMaxMobile}
-							oninput={(e) =>
-								setBeatConfigValue('accentBurstMaxMobile', Number(e.currentTarget.value))}
-						/>
-					</label>
-					<label class="tuning-control">
-						<span>BPM Min {activeBeatConfig.bpmMin}</span>
-						<input
-							type="range"
-							min="40"
-							max="140"
-							step="1"
-							value={activeBeatConfig.bpmMin}
-							oninput={(e) => setBeatConfigValue('bpmMin', Number(e.currentTarget.value))}
-						/>
-					</label>
-					<label class="tuning-control">
-						<span>BPM Max {activeBeatConfig.bpmMax}</span>
-						<input
-							type="range"
-							min="120"
-							max="260"
-							step="1"
-							value={activeBeatConfig.bpmMax}
-							oninput={(e) => setBeatConfigValue('bpmMax', Number(e.currentTarget.value))}
-						/>
-					</label>
-					<label class="tuning-control">
-						<span>Target BPM {activeBeatConfig.targetBpm || 'auto'}</span>
-						<input
-							type="range"
-							min="0"
-							max="220"
-							step="1"
-							value={activeBeatConfig.targetBpm}
-							oninput={(e) => setBeatConfigValue('targetBpm', Number(e.currentTarget.value))}
-						/>
-					</label>
-					<label class="tuning-control">
-						<span>BPM Tolerance {activeBeatConfig.bpmTimingTolerance.toFixed(2)}</span>
-						<input
-							type="range"
-							min="0"
-							max="0.5"
-							step="0.01"
-							value={activeBeatConfig.bpmTimingTolerance}
-							oninput={(e) =>
-								setBeatConfigValue('bpmTimingTolerance', Number(e.currentTarget.value))}
-						/>
-					</label>
-					<label class="tuning-control">
-						<span>BPM Lock {activeBeatConfig.bpmLockStrength.toFixed(2)}</span>
-						<input
-							type="range"
-							min="0"
-							max="1"
-							step="0.01"
-							value={activeBeatConfig.bpmLockStrength}
-							oninput={(e) => setBeatConfigValue('bpmLockStrength', Number(e.currentTarget.value))}
-						/>
-					</label>
-				</div>
-				<div class="tuning-actions">
-					<button class="tuning-reset" type="button" onclick={clearLocalBeatOverride}
-						>Clear Local</button
-					>
-				</div>
-				<label class="tuning-control export-control">
-					<span>Copy to tracks.ts</span>
-					<textarea readonly value={beatConfigExport}></textarea>
+		{#if showParticleTuning}
+			<div class="particle-tuning-panel">
+				<div class="particle-tuning-title">Point Particles</div>
+				<label class="particle-control">
+					<span>Min / line {particleMinPerLine}</span>
+					<input type="range" min="0" max="40" step="1" bind:value={particleMinPerLine} />
 				</label>
+				<label class="particle-control">
+					<span>Max / line {particleMaxPerLine}</span>
+					<input type="range" min="0" max="80" step="1" bind:value={particleMaxPerLine} />
+				</label>
+				<label class="particle-control">
+					<span>Endpoint Bias {particleEndpointBias.toFixed(2)}</span>
+					<input type="range" min="0" max="1" step="0.01" bind:value={particleEndpointBias} />
+				</label>
+				<label class="particle-control checkbox">
+					<input type="checkbox" bind:checked={enableBokeh} />
+					<span>Enable Bokeh</span>
+				</label>
+				<div class="camera-readout">
+					<div class="camera-readout-title">Camera</div>
+					<code>{formatVectorForCode('camera.position', cameraOrigin)}</code>
+					<code>{formatVectorForCode('cameraTarget', cameraTargetPosition)}</code>
+					<div class="camera-help">
+						Arrows move camera. Shift moves target. Option Up/Down moves Z.
+					</div>
+				</div>
 			</div>
 		{/if}
 	</div>
@@ -1282,59 +944,7 @@
 		position: relative;
 		z-index: 1;
 	}
-	.beat-debug {
-		position: fixed;
-		top: 14px;
-		left: 14px;
-		z-index: 3;
-		width: 220px;
-		padding: 10px 12px;
-		border-radius: 10px;
-		background: rgba(9, 12, 22, 0.38);
-		backdrop-filter: blur(10px);
-		-webkit-backdrop-filter: blur(10px);
-		border: 1px solid rgba(255, 255, 255, 0.22);
-		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
-		color: rgba(255, 255, 255, 0.92);
-		font-size: 11px;
-		line-height: 1.3;
-		letter-spacing: 0.02em;
-		font-family: 'Zen Dots';
-		pointer-events: none;
-	}
-	.beat-debug-title {
-		font-size: 10px;
-		margin-bottom: 8px;
-		opacity: 0.8;
-		text-transform: uppercase;
-	}
-	.beat-debug-row {
-		display: flex;
-		justify-content: space-between;
-		gap: 10px;
-		margin-bottom: 3px;
-	}
-	.beat-meter {
-		position: relative;
-		height: 12px;
-		margin-top: 8px;
-		border-radius: 999px;
-		overflow: hidden;
-		background: rgba(255, 255, 255, 0.14);
-	}
-	.beat-meter-fill {
-		height: 100%;
-		background: linear-gradient(90deg, rgba(120, 220, 255, 0.75), rgba(255, 255, 255, 0.88));
-	}
-	.beat-meter-threshold {
-		position: absolute;
-		top: 0;
-		bottom: 0;
-		width: 2px;
-		background: rgba(255, 120, 120, 0.95);
-		transform: translateX(-1px);
-	}
-	.tuning-wrap {
+	.particle-tuning {
 		position: fixed;
 		top: 14px;
 		right: 14px;
@@ -1344,7 +954,7 @@
 		align-items: flex-end;
 		gap: 8px;
 	}
-	.tuning-toggle {
+	.particle-tuning-toggle {
 		background: rgba(9, 12, 22, 0.58);
 		border: 1px solid rgba(255, 255, 255, 0.26);
 		color: rgba(255, 255, 255, 0.92);
@@ -1353,11 +963,10 @@
 		font-size: 11px;
 		line-height: 1;
 		font-family: inherit;
+		cursor: pointer;
 	}
-	.tuning-panel {
-		width: min(280px, calc(100vw - 28px));
-		max-height: min(68vh, 520px);
-		overflow: auto;
+	.particle-tuning-panel {
+		width: min(260px, calc(100vw - 28px));
 		padding: 10px;
 		border-radius: 10px;
 		background: rgba(9, 12, 22, 0.45);
@@ -1370,52 +979,54 @@
 		line-height: 1.25;
 		font-family: inherit;
 	}
-	.tuning-header {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
+	.particle-tuning-title {
 		margin-bottom: 8px;
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
 	}
-	.tuning-reset {
-		background: rgba(255, 255, 255, 0.08);
-		border: 1px solid rgba(255, 255, 255, 0.24);
-		color: rgba(255, 255, 255, 0.92);
-		padding: 3px 7px;
-		border-radius: 7px;
-		font-size: 10px;
-		font-family: inherit;
-	}
-	.tuning-grid {
-		display: grid;
-		gap: 7px;
-	}
-	.tuning-control {
+	.particle-control {
 		display: grid;
 		gap: 3px;
+		margin-top: 7px;
 	}
-	.tuning-control span {
+	.particle-control span {
 		display: flex;
 		justify-content: space-between;
 	}
-	.tuning-control input {
+	.particle-control input {
 		width: 100%;
 		accent-color: #9cdcff;
 	}
-	.tuning-actions {
+	.checkbox {
 		display: flex;
-		justify-content: flex-end;
-		padding-top: 2px;
+		gap: 8px;
+		align-items: center;
 	}
-	.export-control textarea {
-		width: 100%;
-		min-height: 92px;
-		resize: vertical;
-		border: 1px solid rgba(255, 255, 255, 0.18);
-		border-radius: 7px;
-		background: rgba(0, 0, 0, 0.22);
-		color: rgba(255, 255, 255, 0.82);
+	.checkbox span {
+		white-space: nowrap;
+		width: fit-content;
+	}
+	.checkbox input {
+		width: unset;
+	}
+	.camera-readout {
+		display: grid;
+		gap: 6px;
+		margin-top: 12px;
+		padding-top: 10px;
+		border-top: 1px solid rgba(255, 255, 255, 0.16);
+	}
+	.camera-readout-title {
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+	.camera-readout code {
+		display: block;
+		overflow-wrap: anywhere;
+		border-radius: 6px;
+		background: rgba(0, 0, 0, 0.28);
+		padding: 6px;
+		color: rgba(214, 241, 255, 0.94);
 		font:
 			10px/1.35 ui-monospace,
 			SFMono-Regular,
@@ -1424,9 +1035,10 @@
 			Consolas,
 			monospace;
 	}
-	.tuning-toggle,
-	.tuning-reset {
-		cursor: pointer;
+	.camera-help {
+		color: rgba(255, 255, 255, 0.58);
+		font-size: 10px;
+		line-height: 1.35;
 	}
 	.list {
 		max-width: 440px;

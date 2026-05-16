@@ -1,28 +1,4 @@
-import type { BeatConfig, Track } from './types';
-
-export const defaultBeatConfig: BeatConfig = {
-	downbeatMinHz: 45,
-	downbeatMaxHz: 145,
-	downbeatThreshold: 1.18,
-	downbeatMinEnergy: 0.035,
-	downbeatBurstDesktop: 72,
-	downbeatBurstMobile: 16,
-	downbeatBurstMaxDesktop: 220,
-	downbeatBurstMaxMobile: 70,
-	accentMinHz: 160,
-	accentMaxHz: 2600,
-	accentThreshold: 1.16,
-	accentMinEnergy: 0.028,
-	accentBurstDesktop: 38,
-	accentBurstMobile: 10,
-	accentBurstMaxDesktop: 180,
-	accentBurstMaxMobile: 58,
-	bpmMin: 60,
-	bpmMax: 135,
-	targetBpm: 0,
-	bpmTimingTolerance: 0.24,
-	bpmLockStrength: 0.12
-};
+import type { Track } from './types';
 
 export const tracks: Track[] = [
 	{
@@ -31,8 +7,8 @@ export const tracks: Track[] = [
 		file: '/Club_Foot.m4a',
 		isPlaying: false,
 		released: 'March 26th, 2024',
-		hue: 180,
-		beatConfig: { ...defaultBeatConfig, targetBpm: 108, bpmMin: 90, bpmMax: 125 }
+		gradientStops: ['#ff184c', '#FF8661', '#18C1FF', '#FE35F1', '#D261FF'],
+		bpm: 108
 	},
 	{
 		id: 'gtnw',
@@ -40,8 +16,8 @@ export const tracks: Track[] = [
 		file: '/GTNW.m4a',
 		isPlaying: false,
 		released: 'January 20th, 2024',
-		hue: 5,
-		beatConfig: { ...defaultBeatConfig, targetBpm: 86, bpmMin: 70, bpmMax: 105 }
+		gradientStops: ['#FF1500', '#F5B546', '#ff4b00', '#ffb000', '#fff3a0'],
+		bpm: 86
 	},
 	{
 		id: 'connecting-dots',
@@ -49,8 +25,8 @@ export const tracks: Track[] = [
 		file: '/Connecting_Dots.m4a',
 		isPlaying: false,
 		released: 'September 18th, 2023',
-		hue: 50,
-		beatConfig: { ...defaultBeatConfig, targetBpm: 105, bpmMin: 96, bpmMax: 116 }
+		gradientStops: ['#59F9FF', '#0a5cff', '#00d4ff', '#59F9FF', '#0a5cff', '#00d4ff'],
+		bpm: 105
 	},
 	{
 		id: 'delayed-gratification',
@@ -58,7 +34,7 @@ export const tracks: Track[] = [
 		file: '/Delayed_Gratification.m4a',
 		isPlaying: false,
 		released: 'September 1st, 2023',
-		hue: 150,
-		beatConfig: { ...defaultBeatConfig, targetBpm: 116, bpmMin: 108, bpmMax: 124 }
+		gradientStops: ['#752CFB', '#e33f7f', '#ffb45c', '#6ef3c5'],
+		bpm: 116
 	}
 ];
