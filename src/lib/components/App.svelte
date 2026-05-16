@@ -84,6 +84,11 @@
 			(track as HTMLButtonElement).click();
 		}
 	}
+
+	function switchDimension() {
+		activeVisualizer = activeVisualizer === '2d' ? '3d' : '2d';
+		typedVisualizerCommand = '';
+	}
 </script>
 
 <svelte:window onkeydown={onVisualizerKeydown} />
@@ -93,7 +98,22 @@
 {:else}
 	<Visualizer2D {currentTrack} {music} />
 {/if}
-
+<button
+	class="dimension-switch"
+	class:is-3d={activeVisualizer === '3d'}
+	onclick={switchDimension}
+	aria-label={activeVisualizer === '2d' ? 'Switch to 3D visualizer' : 'Switch to 2D visualizer'}
+>
+	<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+		<path d="M0 0h24v24H0z" fill="none" />
+		<path
+			fill="none"
+			stroke="currentColor"
+			stroke-linejoin="round"
+			d="M12 21v-8m0 8l-6.162-4.402c-.411-.293-.616-.44-.727-.655S5 15.475 5 14.971V8m7 13l6.163-4.402c.41-.293.615-.44.726-.655s.111-.468.111-.972V8m-7 5L5 8m7 5l7-5M5 8l5.838-4.17c.56-.4.842-.601 1.162-.601s.601.2 1.162.601L19 8"
+		/>
+	</svg>
+</button>
 <div class="wrap">
 	<div class="text">
 		<h1>j.Falcon</h1>
@@ -172,5 +192,27 @@
 		h2 {
 			transform: translate(-5px, -50%);
 		}
+	}
+	.dimension-switch {
+		position: fixed;
+		top: 10px;
+		right: 10px;
+		z-index: 2;
+		background: black;
+		padding: 8px;
+		font-size: 12px;
+		outline: none;
+		--highlight: #87bdff;
+	}
+	.dimension-switch:hover,
+	.dimension-switch:focus-visible {
+		border-color: white;
+	}
+	.dimension-switch.is-3d {
+		color: var(--highlight);
+		border-color: transparent;
+	}
+	.dimension-switch.is-3d:focus-visible {
+		border-color: var(--highlight);
 	}
 </style>
