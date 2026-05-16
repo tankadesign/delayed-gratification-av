@@ -22,7 +22,6 @@
 		Vector3,
 		WebGLRenderer
 	} from 'three';
-	import { BokehPass } from 'three/examples/jsm/postprocessing/BokehPass.js';
 	import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 	import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 
@@ -85,8 +84,6 @@
 	let innerWidth = $state(typeof window === 'undefined' ? 393 : window.innerWidth);
 	let innerHeight = $state(typeof window === 'undefined' ? 660 : window.innerHeight);
 
-	let bokehPass = $state<BokehPass | null>(null);
-
 	let renderer: WebGLRenderer | null = null;
 	let scene: Scene | null = null;
 	let camera: PerspectiveCamera | null = null;
@@ -122,8 +119,7 @@
 	let scenePulse = 0;
 	let particleMinPerLine = $state(0);
 	let particleMaxPerLine = $state(70);
-	let showParticleTuning = $state(true);
-	let enableBokeh = $state(false);
+	let showParticleTuning = $state(false);
 	let waveAmplitude = $state(9);
 
 	const lineGhostDecayDesktop = 0.992;
@@ -141,18 +137,6 @@
 	const lineCurveSegments = 36;
 
 	let isMobile = $derived(innerWidth < 560);
-
-	$effect(() => {
-		if (bokehPass) {
-			if (enableBokeh) {
-				composer?.addPass(bokehPass);
-				console.log('bokeh enabled');
-			} else {
-				composer?.removePass(bokehPass);
-				console.log('bokeh removed');
-			}
-		}
-	});
 
 	function getPixelRatio() {
 		const dpr = typeof window === 'undefined' ? 1 : window.devicePixelRatio;
@@ -722,14 +706,6 @@
 
 		composer = new EffectComposer(renderer);
 		composer.addPass(new RenderPass(scene, camera));
-		bokehPass = new BokehPass(scene, camera, {
-			focus: 2,
-			aperture: 0.00025,
-			maxblur: 0.01
-		});
-		if (enableBokeh) {
-			composer.addPass(bokehPass);
-		}
 
 		window.addEventListener('resize', onResize);
 	}
@@ -927,7 +903,6 @@
 
 		composer?.dispose();
 		composer = null;
-		bokehPass = null;
 
 		scene?.clear();
 		scene = null;
@@ -951,7 +926,7 @@
 
 <div class="wrap">
 	<div class="particle-tuning">
-		<button
+		<!-- <button
 			class="particle-tuning-toggle"
 			type="button"
 			onclick={() => {
@@ -959,7 +934,7 @@
 			}}
 		>
 			{showParticleTuning ? 'Hide particles' : 'Particles'}
-		</button>
+		</button> -->
 		{#if showParticleTuning}
 			<div class="particle-tuning-panel">
 				<div class="particle-tuning-title">Point Particles</div>
@@ -970,10 +945,6 @@
 				<label class="particle-control">
 					<span>Burst Rate {particleMaxPerLine}</span>
 					<input type="range" min="0" max="80" step="1" bind:value={particleMaxPerLine} />
-				</label>
-				<label class="particle-control checkbox">
-					<input type="checkbox" bind:checked={enableBokeh} />
-					<span>Enable Bokeh</span>
 				</label>
 				<label class="particle-control">
 					<span>Wave Amp {waveAmplitude.toFixed(1)}</span>
@@ -1044,18 +1015,6 @@
 	.particle-control input {
 		width: 100%;
 		accent-color: #9cdcff;
-	}
-	.checkbox {
-		display: flex;
-		gap: 8px;
-		align-items: center;
-	}
-	.checkbox span {
-		white-space: nowrap;
-		width: fit-content;
-	}
-	.checkbox input {
-		width: unset;
 	}
 	canvas {
 		position: fixed;
