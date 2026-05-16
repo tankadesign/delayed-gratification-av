@@ -101,6 +101,10 @@
 	let cameraOrbitY = 0;
 	let cameraOrbitTargetX = 0;
 	let cameraOrbitTargetY = 0;
+	let cameraTargetOffsetX = 0;
+	let cameraTargetOffsetY = 0;
+	let cameraTargetOffsetTargetX = 0;
+	let cameraTargetOffsetTargetY = 0;
 	let particleLayer: Points | null = null;
 	let particleGeometry: BufferGeometry | null = null;
 	let particleMaterial: ShaderMaterial | null = null;
@@ -140,6 +144,8 @@
 	const waveformSpring = 62;
 	const waveformDamping = 11;
 	const lineCurveSegments = 36;
+	const cameraRightTargetDrift = -5;
+	const cameraBottomTargetDrift = 5;
 	const atmosphereShader = {
 		uniforms: {
 			tDiffuse: { value: null },
@@ -541,9 +547,28 @@
 
 	function updateCameraMotion(now: number, delta: number) {
 		if (!camera) return;
-		cameraTarget.set(cameraTargetPosition.x, cameraTargetPosition.y, cameraTargetPosition.z);
+		const baseCameraTarget = new Vector3(
+			cameraTargetPosition.x,
+			cameraTargetPosition.y,
+			cameraTargetPosition.z
+		);
 		cameraOrbitX = MathUtils.lerp(cameraOrbitX, cameraOrbitTargetX, Math.min(1, delta * 7));
 		cameraOrbitY = MathUtils.lerp(cameraOrbitY, cameraOrbitTargetY, Math.min(1, delta * 7));
+		cameraTargetOffsetX = MathUtils.lerp(
+			cameraTargetOffsetX,
+			cameraTargetOffsetTargetX,
+			Math.min(1, delta * 6)
+		);
+		cameraTargetOffsetY = MathUtils.lerp(
+			cameraTargetOffsetY,
+			cameraTargetOffsetTargetY,
+			Math.min(1, delta * 6)
+		);
+		cameraTarget.set(
+			baseCameraTarget.x + cameraTargetOffsetX,
+			baseCameraTarget.y + cameraTargetOffsetY,
+			baseCameraTarget.z
+		);
 
 		const orbitOffset = new Vector3(
 			cameraOrigin.x - cameraTargetPosition.x,
@@ -553,14 +578,20 @@
 		orbitOffset.applyAxisAngle(new Vector3(0, 1, 0), cameraOrbitX * cameraOrbitMaxRadians);
 		const pitchAxis = new Vector3().crossVectors(new Vector3(0, 1, 0), orbitOffset).normalize();
 		orbitOffset.applyAxisAngle(pitchAxis, cameraOrbitY * cameraOrbitMaxRadians);
-		camera.position.copy(cameraTarget).add(orbitOffset);
+		camera.position.copy(baseCameraTarget).add(orbitOffset);
 		camera.lookAt(cameraTarget);
 	}
 
 	function updateCameraOrbit(event: PointerEvent) {
 		if (innerWidth <= 0 || innerHeight <= 0) return;
-		cameraOrbitTargetX = MathUtils.clamp((event.clientX / innerWidth - 0.5) * 2, -1, 1);
-		cameraOrbitTargetY = MathUtils.clamp((event.clientY / innerHeight - 0.5) * 2, -1, 1);
+		const normalizedX = MathUtils.clamp((event.clientX / innerWidth - 0.5) * 2, -1, 1);
+		const normalizedY = MathUtils.clamp((event.clientY / innerHeight - 0.5) * 2, -1, 1);
+		cameraOrbitTargetX = normalizedX;
+		cameraOrbitTargetY = normalizedY;
+		cameraTargetOffsetTargetX =
+			-MathUtils.smoothstep(Math.max(0, normalizedX), 0, 1) * cameraRightTargetDrift;
+		cameraTargetOffsetTargetY =
+			-MathUtils.smoothstep(Math.max(0, normalizedY), 0, 1) * cameraBottomTargetDrift;
 	}
 
 	function kickWaveformBoost() {
