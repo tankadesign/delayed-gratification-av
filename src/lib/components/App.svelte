@@ -46,6 +46,10 @@
 		spectrumT: number;
 		currentHalfLength: number;
 		currentColor: Color;
+		rollShake: number;
+		rollVelocity: number;
+		rollDirection: number;
+		rollPulseAt: number;
 	}
 
 	interface FloatParticle {
@@ -101,6 +105,7 @@
 	let floatParticles: FloatParticle[] = [];
 	let nextParticleIndex = 0;
 	let lastParticleBeatIndex = -1;
+	let lastLineShakeBeatIndex = -1;
 	let lineShellGeometry: CylinderGeometry | null = null;
 	let lineCoreGeometry: CylinderGeometry | null = null;
 	let lineTipGeometry: SphereGeometry | null = null;
@@ -118,6 +123,7 @@
 	let particleEndpointBias = $state(0.92);
 	let showParticleTuning = $state(true);
 	let enableBokeh = $state(false);
+	let lineShakeDegrees = $state(4);
 
 	const lineGhostDecayDesktop = 0.992;
 	const lineGhostDecayMobile = 0.988;
@@ -127,6 +133,9 @@
 	const maxFloatParticlesMobile = 6000;
 	const cameraLoopSeconds = 24;
 	const cameraKeyboardStep = 0.25;
+	const lineShakeCascadeSeconds = 0.22;
+	const lineShakeSpring = 78;
+	const lineShakeDamping = 12;
 
 	let isMobile = $derived(innerWidth < 560);
 
@@ -328,7 +337,11 @@
 				tipMaterial,
 				spectrumT,
 				currentHalfLength: 0,
-				currentColor: new Color(0xffffff)
+				currentColor: new Color(0xffffff),
+				rollShake: 0,
+				rollVelocity: 0,
+				rollDirection: 1,
+				rollPulseAt: 0
 			});
 		}
 	}
@@ -430,16 +443,40 @@
 		scene.add(particleLayer);
 	}
 
-	function updateCameraMotion(now: number) {
+	function updateCameraMotion(now: number, delta: number) {
 		if (!camera) return;
-		cameraTarget.set(cameraTargetPosition.x, cameraTargetPosition.y, cameraTargetPosition.z);
 		const loopT = (now / 1000 / cameraLoopSeconds) * Math.PI * 2;
 		camera.position.set(
 			cameraOrigin.x,
 			cameraOrigin.y + Math.sin(loopT) * (isMobile ? 0.45 : 1.5),
 			cameraOrigin.z
 		);
+		cameraTarget.set(cameraTargetPosition.x, cameraTargetPosition.y, cameraTargetPosition.z);
 		camera.lookAt(cameraTarget);
+	}
+
+	function kickLineShake(nowSeconds: number) {
+		const center = (lines.length - 1) * 0.5;
+		const maxDistance = Math.max(1, center);
+		const amount = MathUtils.degToRad(lineShakeDegrees);
+		for (let i = 0; i < lines.length; i++) {
+			const line = lines[i];
+			const distanceT = Math.abs(i - center) / maxDistance;
+			line.rollDirection = Math.random() < 0.5 ? -1 : 1;
+			line.rollPulseAt = nowSeconds + distanceT * lineShakeCascadeSeconds;
+			line.rollVelocity += line.rollDirection * amount * MathUtils.lerp(18, 11, distanceT);
+		}
+	}
+
+	function updateLineShake(line: LineNode, delta: number, nowSeconds: number) {
+		if (line.rollPulseAt && nowSeconds >= line.rollPulseAt) {
+			line.rollShake += line.rollDirection * MathUtils.degToRad(lineShakeDegrees);
+			line.rollPulseAt = 0;
+		}
+		const acceleration = -line.rollShake * lineShakeSpring - line.rollVelocity * lineShakeDamping;
+		line.rollVelocity += acceleration * delta;
+		line.rollShake += line.rollVelocity * delta;
+		line.group.rotation.z = line.rollShake;
 	}
 
 	function formatCameraValue(value: number) {
@@ -495,13 +532,17 @@
 		const particle = floatParticles[nextParticleIndex];
 		const index = nextParticleIndex;
 		nextParticleIndex = (nextParticleIndex + 1) % floatParticles.length;
-		const tipWorldPosition = new Vector3();
 		const tip = side < 0 ? line.tipLeft : line.tipRight;
-		tip.getWorldPosition(tipWorldPosition);
 		const inwardJitter = Math.pow(Math.random(), MathUtils.lerp(10, 30, particleEndpointBias));
-		const x = tipWorldPosition.x - side * line.currentHalfLength * 0.055 * inwardJitter;
-		const y = tipWorldPosition.y + MathUtils.lerp(0.01, 0.08, Math.random());
-		const z = tipWorldPosition.z + MathUtils.lerp(-0.045, 0.045, Math.random());
+		const spawnPosition = new Vector3(
+			tip.position.x - side * line.currentHalfLength * 0.055 * inwardJitter,
+			tip.position.y + MathUtils.lerp(0.01, 0.08, Math.random()),
+			tip.position.z + MathUtils.lerp(-0.045, 0.045, Math.random())
+		);
+		line.group.localToWorld(spawnPosition);
+		const x = spawnPosition.x;
+		const y = spawnPosition.y;
+		const z = spawnPosition.z;
 
 		particle.active = true;
 		particle.life = 0;
@@ -532,6 +573,10 @@
 		if (!lines.length || !currentTrack?.bpm || !music || music.paused) return;
 		const beatSeconds = 60 / currentTrack.bpm;
 		const beatIndex = Math.floor(music.currentTime / beatSeconds);
+		if (beatIndex !== lastLineShakeBeatIndex) {
+			lastLineShakeBeatIndex = beatIndex;
+			kickLineShake(music.currentTime);
+		}
 		if (beatIndex === lastParticleBeatIndex) return;
 		lastParticleBeatIndex = beatIndex;
 
@@ -617,7 +662,7 @@
 
 		setupGroundLines();
 		setupFloatParticles();
-		updateCameraMotion(0);
+		updateCameraMotion(0, 0.016);
 
 		composer = new EffectComposer(renderer);
 		composer.addPass(new RenderPass(scene, camera));
@@ -633,7 +678,7 @@
 		window.addEventListener('resize', onResize);
 	}
 
-	function updateGroundLines(energy: SceneEnergy, time: number) {
+	function updateGroundLines(energy: SceneEnergy, time: number, delta: number, audioTime: number) {
 		if (!dataArray || !lines.length) return;
 
 		const gradientStops = currentTrack?.gradientStops ?? ['#ff184c', '#1887ff'];
@@ -641,6 +686,7 @@
 
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
+			updateLineShake(line, delta, audioTime);
 			const centerIndex = Math.round(line.spectrumT * (dataArray.length - 1));
 			const bandRadius = Math.max(1, Math.floor(dataArray.length / Math.max(18, lines.length) / 2));
 			const sampleStart = Math.max(0, centerIndex - bandRadius);
@@ -749,11 +795,11 @@
 		if (store.analyser && dataArray) {
 			store.analyser.getByteFrequencyData(dataArray);
 			const energy = readSceneEnergy(delta);
-			updateGroundLines(energy, now);
+			updateGroundLines(energy, now, delta, music?.currentTime ?? 0);
 		}
 		emitLineParticles();
 		updateFloatParticles(delta);
-		updateCameraMotion(now);
+		updateCameraMotion(now, delta);
 
 		if (composer) {
 			composer.render(delta);
@@ -853,6 +899,7 @@
 	function onPlayTrack(audio: TrackAudio, track: Track) {
 		currentTrack = track;
 		lastParticleBeatIndex = -1;
+		lastLineShakeBeatIndex = -1;
 		music?.pause();
 		music = audio.audioEl;
 		audioSource = audio.audioSource;
@@ -904,6 +951,10 @@
 				<label class="particle-control checkbox">
 					<input type="checkbox" bind:checked={enableBokeh} />
 					<span>Enable Bokeh</span>
+				</label>
+				<label class="particle-control">
+					<span>Line Shake {lineShakeDegrees.toFixed(1)} deg</span>
+					<input type="range" min="0.5" max="10" step="0.1" bind:value={lineShakeDegrees} />
 				</label>
 				<div class="camera-readout">
 					<div class="camera-readout-title">Camera</div>
