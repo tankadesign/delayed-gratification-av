@@ -4,6 +4,7 @@ export interface Track {
 	file: string;
 	isPlaying: boolean;
 	released: string;
+	hue: number;
 	gradientStops: string[];
 	bpm: number;
 }
