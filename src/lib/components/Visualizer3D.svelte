@@ -49,8 +49,11 @@
 		currentColor: Color;
 		activity: number;
 		emissionCarry: number;
+		smoothedPeak: number;
 		curveOffsets: Float32Array;
-		curveVelocities: Float32Array;
+		historyBuffer: Float32Array;
+		historyHead: number;
+		historyCount: number;
 	}
 
 	interface FloatParticle {
@@ -130,7 +133,7 @@
 	let particleMinPerLine = $state(0);
 	let particleMaxPerLine = $state(70);
 	let showParticleTuning = $state(false);
-	let waveAmplitude = $state(9);
+	let waveAmplitude = $state(12);
 
 	const lineGhostDecayDesktop = 0.992;
 	const lineGhostDecayMobile = 0.988;
@@ -142,10 +145,11 @@
 	const cameraOrbitMaxRadians = MathUtils.degToRad(30);
 	const waveBeatBoostSpring = 42;
 	const waveBeatBoostDamping = 9;
-	const waveformSpring = 62;
-	const waveformDamping = 11;
 	const lineCurveSegments = 80;
 	const curveScratch = new Float32Array(lineCurveSegments + 1);
+	const historyCapacity = 256;
+	const historyWindow = 5.0; // seconds of frequency history shown per line
+	let avgDeltaTime = 1 / 60;
 	const atmosphereShader = {
 		uniforms: {
 			tDiffuse: { value: null },
@@ -442,8 +446,11 @@
 				currentColor: new Color(0xffffff),
 				activity: 0,
 				emissionCarry: 0,
+				smoothedPeak: 0,
 				curveOffsets: new Float32Array(lineCurveSegments + 1),
-				curveVelocities: new Float32Array(lineCurveSegments + 1)
+				historyBuffer: new Float32Array(historyCapacity),
+				historyHead: 0,
+				historyCount: 0
 			});
 		}
 	}
@@ -630,40 +637,7 @@
 		waveBeatBoost = Math.max(0, waveBeatBoost);
 	}
 
-	function updateLineWaveform(
-		line: LineNode,
-		delta: number,
-		centerIndex: number,
-		bandRadius: number,
-		avgPct: number,
-		peakPct: number,
-		viewportWidthAtLine: number,
-		time: number
-	) {
-		if (!dataArray?.length) return;
-		const maxIndex = dataArray.length - 1;
-		const waveRadius = Math.max(3, bandRadius * 5);
-		const amplitude =
-			viewportWidthAtLine *
-			MathUtils.lerp(0.0015, 0.028, waveAmplitude / 10) *
-			MathUtils.lerp(0.08, 3.8, Math.pow(Math.min(1, peakPct * 1.4), 0.65)) *
-			(1 + Math.min(2.4, waveBeatBoost));
 
-		for (let i = 0; i <= lineCurveSegments; i++) {
-			const t = i / lineCurveSegments;
-			const index = Math.round(centerIndex + (t - 0.5) * waveRadius * 2);
-			const sample = dataArray[MathUtils.clamp(index, 0, maxIndex)] / 255;
-			const centeredSample = sample - avgPct;
-			const harmonic = Math.sin(t * Math.PI * 4 + time * 0.006 + line.depthT * 8) * peakPct * 0.22;
-			const endFalloff = Math.sin(t * Math.PI);
-			const target = (centeredSample + harmonic) * amplitude * MathUtils.lerp(0.45, 1, endFalloff);
-			const acceleration =
-				(target - line.curveOffsets[i]) * waveformSpring -
-				line.curveVelocities[i] * waveformDamping;
-			line.curveVelocities[i] += acceleration * delta;
-			line.curveOffsets[i] += line.curveVelocities[i] * delta;
-		}
-	}
 
 	function endpointSide() {
 		return Math.random() < 0.5 ? -1 : 1;
@@ -895,16 +869,28 @@
 			const activity = Math.min(1, widthDrive * 1.1 + ghostCurve * 0.9 + pulse * 0.35);
 			line.activity = MathUtils.lerp(line.activity, activity, Math.min(1, delta * 12));
 			const viewportWidthAtLine = getViewportWidthAtZ(line.group.position.z);
-			updateLineWaveform(
-				line,
-				delta,
-				centerIndex,
-				bandRadius,
-				avgPct,
-				peakPct,
-				viewportWidthAtLine,
-				time
-			);
+			// Advance slow baseline so the stored deviation oscillates around zero
+			line.smoothedPeak = MathUtils.lerp(line.smoothedPeak, peakPct, Math.min(1, delta * 1.5));
+			// Record this frame's amplitude into the line's history ring buffer
+			line.historyBuffer[line.historyHead] = peakPct - line.smoothedPeak;
+			line.historyHead = (line.historyHead + 1) % historyCapacity;
+			line.historyCount = Math.min(line.historyCount + 1, historyCapacity);
+			// Map history onto curve: left segment = oldest, right segment = newest
+			const samplesInWindow = Math.max(2, Math.min(line.historyCount, Math.round(historyWindow / avgDeltaTime)));
+			const displayScale =
+				viewportWidthAtLine *
+				MathUtils.lerp(0.003, 0.038, waveAmplitude / 10) *
+				(1 + Math.min(2.4, waveBeatBoost));
+			for (let seg = 0; seg <= lineCurveSegments; seg++) {
+				const t = seg / lineCurveSegments; // 0 = oldest end, 1 = newest end
+				const rawAge = (1 - t) * (samplesInWindow - 1);
+				const ageFloor = Math.floor(rawAge);
+				const ageFrac = rawAge - ageFloor;
+				const idx0 = ((line.historyHead - 1 - ageFloor) % historyCapacity + historyCapacity) % historyCapacity;
+				const idx1 = ((line.historyHead - 2 - ageFloor) % historyCapacity + historyCapacity) % historyCapacity;
+				const historicValue = MathUtils.lerp(line.historyBuffer[idx0], line.historyBuffer[idx1], ageFrac);
+				line.curveOffsets[seg] = historicValue * displayScale;
+			}
 			const baseHalf =
 				viewportWidthAtLine * MathUtils.lerp(0.0012, 0.018, nearWeight) +
 				viewportWidthAtLine * pulse * MathUtils.lerp(0.0006, 0.004, nearWeight);
@@ -988,6 +974,7 @@
 	function animateFrame(now: number) {
 		const delta = previousFrameTime ? Math.min(0.05, (now - previousFrameTime) / 1000) : 0.016;
 		previousFrameTime = now;
+		avgDeltaTime = MathUtils.lerp(avgDeltaTime, delta, 0.05);
 		syncAnalyserData();
 
 		if (store.analyser && dataArray) {
