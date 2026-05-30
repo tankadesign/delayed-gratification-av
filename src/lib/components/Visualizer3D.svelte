@@ -144,7 +144,8 @@
 	const waveBeatBoostDamping = 9;
 	const waveformSpring = 62;
 	const waveformDamping = 11;
-	const lineCurveSegments = 36;
+	const lineCurveSegments = 80;
+	const curveScratch = new Float32Array(lineCurveSegments + 1);
 	const atmosphereShader = {
 		uniforms: {
 			tDiffuse: { value: null },
@@ -325,10 +326,19 @@
 		curveOffsets: Float32Array
 	) {
 		const positions = geometry.attributes.position.array as Float32Array;
+		const n = lineCurveSegments + 1;
+		// Smooth display offsets only — endpoints anchored so tip positions stay correct
+		for (let i = 0; i < n; i++) curveScratch[i] = curveOffsets[i];
+		for (let pass = 0; pass < 3; pass++) {
+			for (let i = 1; i < n - 1; i++) {
+				curveScratch[i] =
+					curveScratch[i - 1] * 0.25 + curveScratch[i] * 0.5 + curveScratch[i + 1] * 0.25;
+			}
+		}
 		for (let i = 0; i <= lineCurveSegments; i++) {
 			const t = i / lineCurveSegments;
 			const x = MathUtils.lerp(-halfLength, halfLength, t);
-			const y = curveOffsets[i] ?? 0;
+			const y = curveScratch[i];
 			const offset = i * 6;
 			positions[offset] = x;
 			positions[offset + 1] = y - halfThickness;
@@ -635,8 +645,8 @@
 		const waveRadius = Math.max(3, bandRadius * 5);
 		const amplitude =
 			viewportWidthAtLine *
-			MathUtils.lerp(0.0015, 0.021, waveAmplitude / 10) *
-			MathUtils.lerp(0.55, 1.7, Math.min(1, peakPct * 1.4)) *
+			MathUtils.lerp(0.0015, 0.028, waveAmplitude / 10) *
+			MathUtils.lerp(0.08, 3.8, Math.pow(Math.min(1, peakPct * 1.4), 0.65)) *
 			(1 + Math.min(2.4, waveBeatBoost));
 
 		for (let i = 0; i <= lineCurveSegments; i++) {

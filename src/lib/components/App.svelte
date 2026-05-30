@@ -15,13 +15,9 @@
 
 	let music = $state<HTMLAudioElement | null>(null);
 	let audioSource = $state<AudioNode | null>(null);
-	let activeVisualizer = $state<'2d' | '3d'>('2d');
+	let activeVisualizer = $state<'2d' | '3d'>('3d');
 	let typedVisualizerCommand = '';
 	let hasConnectedAnalyserOutput = false;
-
-	onMount(() => {
-		activeVisualizer = '2d';
-	});
 
 	function onVisualizerKeydown(event: KeyboardEvent) {
 		if (event.metaKey || event.ctrlKey || event.altKey) return;
