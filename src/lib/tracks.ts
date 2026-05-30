@@ -2,16 +2,6 @@ import type { Track } from './types';
 
 export const tracks: Track[] = [
 	{
-		id: 'club-foot',
-		name: 'Club Foot',
-		file: '/Club_Foot.m4a',
-		isPlaying: false,
-		released: 'March 26th, 2024',
-		hue: 180,
-		gradientStops: ['#ff184c', '#FF8661', '#18C1FF', '#FE35F1', '#D261FF'],
-		bpm: 108
-	},
-	{
 		id: 'gtnw',
 		name: 'GTNW',
 		file: '/GTNW.m4a',
@@ -20,6 +10,16 @@ export const tracks: Track[] = [
 		hue: 5,
 		gradientStops: ['#FF1500', '#F5B546', '#ff4b00', '#ffb000', '#fff3a0'],
 		bpm: 86
+	},
+	{
+		id: 'club-foot',
+		name: 'Club Foot',
+		file: '/Club_Foot.m4a',
+		isPlaying: false,
+		released: 'March 26th, 2024',
+		hue: 180,
+		gradientStops: ['#ff184c', '#FF8661', '#18C1FF', '#FE35F1', '#D261FF'],
+		bpm: 108
 	},
 	{
 		id: 'connecting-dots',
