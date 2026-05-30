@@ -94,17 +94,12 @@
 	let bloomPass: UnrealBloomPass | null = null;
 	let atmospherePass: ShaderPass | null = null;
 	let groundGroup: Group | null = null;
-	let cameraTarget = new Vector3(0, -3.4, -45);
 	let cameraOrigin = { x: -17, y: 1, z: 10.5 };
 	let cameraTargetPosition = { x: -6, y: 0, z: -15 };
 	let cameraOrbitX = 0;
 	let cameraOrbitY = 0;
 	let cameraOrbitTargetX = 0;
 	let cameraOrbitTargetY = 0;
-	let cameraTargetOffsetX = 0;
-	let cameraTargetOffsetY = 0;
-	let cameraTargetOffsetTargetX = 0;
-	let cameraTargetOffsetTargetY = 0;
 	let particleLayer: Points | null = null;
 	let particleGeometry: BufferGeometry | null = null;
 	let particleMaterial: ShaderMaterial | null = null;
@@ -126,6 +121,12 @@
 	let smoothedHigh = 0;
 	let smoothedTransient = 0;
 	let scenePulse = 0;
+	let rotY = 0;
+	let rotX = 0;
+	let rotZ = 0;
+	let rotVelY = 0;
+	let rotVelX = 0;
+	let rotVelZ = 0;
 	let particleMinPerLine = $state(0);
 	let particleMaxPerLine = $state(70);
 	let showParticleTuning = $state(false);
@@ -144,8 +145,6 @@
 	const waveformSpring = 62;
 	const waveformDamping = 11;
 	const lineCurveSegments = 36;
-	const cameraRightTargetDrift = -5;
-	const cameraBottomTargetDrift = 5;
 	const atmosphereShader = {
 		uniforms: {
 			tDiffuse: { value: null },
@@ -355,6 +354,7 @@
 		}
 		lines = [];
 		groundGroup.clear();
+		if (particleLayer) groundGroup.add(particleLayer);
 
 		if (!lineTipGeometry) {
 			lineTipGeometry = new SphereGeometry(0.085, 12, 10);
@@ -459,10 +459,10 @@
 	}
 
 	function setupFloatParticles() {
-		if (!scene) return;
+		if (!scene || !groundGroup) return;
 
 		if (particleLayer) {
-			scene.remove(particleLayer);
+			groundGroup.remove(particleLayer);
 		}
 		particleGeometry?.dispose();
 		particleMaterial?.dispose();
@@ -542,34 +542,47 @@
 		});
 		particleLayer = new Points(particleGeometry, particleMaterial);
 		particleLayer.frustumCulled = false;
-		scene.add(particleLayer);
+		groundGroup.add(particleLayer);
+	}
+
+	function updateGroupRotation(now: number, delta: number) {
+		if (!groundGroup) return;
+		const t = now / 1000;
+		// Sine waves modulate angular velocity — rotation accumulates continuously,
+		// never snapping back, just changing pace and direction gradually.
+		const targetVelY =
+			Math.sin(t * 0.0707) * 0.22 +
+			Math.sin(t * 0.0412 + 1.31) * 0.12 +
+			Math.sin(t * 0.0171 + 2.73) * 0.08;
+		const targetVelX =
+			Math.sin(t * 0.0283 + 0.94) * 0.10 +
+			Math.sin(t * 0.0591 + 3.15) * 0.06 +
+			Math.sin(t * 0.0131 + 1.82) * 0.07;
+		const targetVelZ =
+			Math.sin(t * 0.0523 + 0.40) * 0.04 +
+			Math.sin(t * 0.0198 + 2.10) * 0.03;
+		rotVelY = MathUtils.lerp(rotVelY, targetVelY, Math.min(1, delta * 1.2));
+		// Spring restoring forces on X and Z keep scene from drifting off-screen;
+		// Y is free to accumulate as a panoramic turntable rotation.
+		rotVelX = MathUtils.lerp(rotVelX, targetVelX, Math.min(1, delta * 0.9));
+		rotVelX -= rotX * 2.5 * delta;
+		rotVelZ = MathUtils.lerp(rotVelZ, targetVelZ, Math.min(1, delta * 0.6));
+		rotVelZ -= rotZ * 5.0 * delta;
+		rotY += rotVelY * delta;
+		rotX += rotVelX * delta;
+		rotZ += rotVelZ * delta;
+		groundGroup.rotation.set(rotX, rotY, rotZ);
 	}
 
 	function updateCameraMotion(now: number, delta: number) {
 		if (!camera) return;
+		cameraOrbitX = MathUtils.lerp(cameraOrbitX, cameraOrbitTargetX, Math.min(1, delta * 7));
+		cameraOrbitY = MathUtils.lerp(cameraOrbitY, cameraOrbitTargetY, Math.min(1, delta * 7));
 		const baseCameraTarget = new Vector3(
 			cameraTargetPosition.x,
 			cameraTargetPosition.y,
 			cameraTargetPosition.z
 		);
-		cameraOrbitX = MathUtils.lerp(cameraOrbitX, cameraOrbitTargetX, Math.min(1, delta * 7));
-		cameraOrbitY = MathUtils.lerp(cameraOrbitY, cameraOrbitTargetY, Math.min(1, delta * 7));
-		cameraTargetOffsetX = MathUtils.lerp(
-			cameraTargetOffsetX,
-			cameraTargetOffsetTargetX,
-			Math.min(1, delta * 6)
-		);
-		cameraTargetOffsetY = MathUtils.lerp(
-			cameraTargetOffsetY,
-			cameraTargetOffsetTargetY,
-			Math.min(1, delta * 6)
-		);
-		cameraTarget.set(
-			baseCameraTarget.x + cameraTargetOffsetX,
-			baseCameraTarget.y + cameraTargetOffsetY,
-			baseCameraTarget.z
-		);
-
 		const orbitOffset = new Vector3(
 			cameraOrigin.x - cameraTargetPosition.x,
 			cameraOrigin.y - cameraTargetPosition.y,
@@ -579,19 +592,20 @@
 		const pitchAxis = new Vector3().crossVectors(new Vector3(0, 1, 0), orbitOffset).normalize();
 		orbitOffset.applyAxisAngle(pitchAxis, cameraOrbitY * cameraOrbitMaxRadians);
 		camera.position.copy(baseCameraTarget).add(orbitOffset);
-		camera.lookAt(cameraTarget);
+		// Always look at the world-space centre of the scene objects
+		const sceneCenter = groundGroup
+			? groundGroup.localToWorld(new Vector3(0, -2.7, -45))
+			: baseCameraTarget;
+		camera.lookAt(sceneCenter);
 	}
 
 	function updateCameraOrbit(event: PointerEvent) {
+		if (event.pointerType === 'touch') return;
 		if (innerWidth <= 0 || innerHeight <= 0) return;
 		const normalizedX = MathUtils.clamp((event.clientX / innerWidth - 0.5) * 2, -1, 1);
 		const normalizedY = MathUtils.clamp((event.clientY / innerHeight - 0.5) * 2, -1, 1);
 		cameraOrbitTargetX = normalizedX;
 		cameraOrbitTargetY = normalizedY;
-		cameraTargetOffsetTargetX =
-			-MathUtils.smoothstep(Math.max(0, normalizedX), 0, 1) * cameraRightTargetDrift;
-		cameraTargetOffsetTargetY =
-			-MathUtils.smoothstep(Math.max(0, normalizedY), 0, 1) * cameraBottomTargetDrift;
 	}
 
 	function kickWaveformBoost() {
@@ -667,6 +681,7 @@
 			tip.position.z + MathUtils.lerp(-0.018, 0.018, Math.random())
 		);
 		line.group.localToWorld(spawnPosition);
+		groundGroup?.worldToLocal(spawnPosition);
 		const x = spawnPosition.x;
 		const y = spawnPosition.y;
 		const z = spawnPosition.z;
@@ -973,6 +988,7 @@
 		updateBeatBoost();
 		emitLineParticles(delta);
 		updateFloatParticles(delta);
+		updateGroupRotation(now, delta);
 		updateCameraMotion(now, delta);
 		if (atmospherePass) {
 			atmospherePass.uniforms.time.value = now / 1000;
@@ -1016,7 +1032,7 @@
 		lineTipGeometry = null;
 
 		if (particleLayer) {
-			scene?.remove(particleLayer);
+			groundGroup?.remove(particleLayer);
 		}
 		particleLayer = null;
 		particleGeometry?.dispose();
