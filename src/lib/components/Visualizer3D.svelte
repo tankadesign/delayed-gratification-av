@@ -871,16 +871,19 @@
 			const viewportWidthAtLine = getViewportWidthAtZ(line.group.position.z);
 			// Advance slow baseline so the stored deviation oscillates around zero
 			line.smoothedPeak = MathUtils.lerp(line.smoothedPeak, peakPct, Math.min(1, delta * 1.5));
+			// Bake current beat boost into the sample so historical left-end values aren't
+			// re-scaled by future beats when read back for display
+			const beatBoostedSample = (peakPct - line.smoothedPeak) * (1 + Math.min(2.4, waveBeatBoost));
 			// Record this frame's amplitude into the line's history ring buffer
-			line.historyBuffer[line.historyHead] = peakPct - line.smoothedPeak;
+			line.historyBuffer[line.historyHead] = beatBoostedSample;
 			line.historyHead = (line.historyHead + 1) % historyCapacity;
 			line.historyCount = Math.min(line.historyCount + 1, historyCapacity);
 			// Map history onto curve: left segment = oldest, right segment = newest
 			const samplesInWindow = Math.max(2, Math.min(line.historyCount, Math.round(historyWindow / avgDeltaTime)));
+			// No waveBeatBoost here — it's already baked into each stored sample
 			const displayScale =
 				viewportWidthAtLine *
-				MathUtils.lerp(0.003, 0.038, waveAmplitude / 10) *
-				(1 + Math.min(2.4, waveBeatBoost));
+				MathUtils.lerp(0.003, 0.038, waveAmplitude / 10);
 			for (let seg = 0; seg <= lineCurveSegments; seg++) {
 				const t = seg / lineCurveSegments; // 0 = oldest end, 1 = newest end
 				const rawAge = (1 - t) * (samplesInWindow - 1);
