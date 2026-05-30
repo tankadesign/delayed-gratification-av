@@ -202,6 +202,8 @@
 		padding: 8px;
 		font-size: 12px;
 		outline: none;
+		color: white;
+		border: 1px solid rgb(255 255 255 / 0.2);
 		--highlight: #87bdff;
 	}
 	.dimension-switch:hover,
@@ -210,8 +212,9 @@
 	}
 	.dimension-switch.is-3d {
 		color: var(--highlight);
-		border-color: transparent;
+		border-color: color-mix(in srgb, var(--highlight), transparent 60%);
 	}
+	.dimension-switch.is-3d:hover,
 	.dimension-switch.is-3d:focus-visible {
 		border-color: var(--highlight);
 	}
