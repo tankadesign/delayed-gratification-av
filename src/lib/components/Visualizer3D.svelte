@@ -140,12 +140,13 @@
 	const maxFloatParticlesDesktop = 100_000;
 	const maxFloatParticlesMobile = 6000;
 	const particleEmissionRateScale = 0.34;
-	const curveParticlesPerLine = 128;
+	const curveParticlesPerLineDesktop = 128;
+	const curveParticlesPerLineMobile = 32;
 	const curveParticlePulseThreshold = 0.6;
 	const curveParticleHoldSeconds = 0.45;
-	const curveParticleFadeMinSeconds = 1;
-	const curveParticleFadeMaxSeconds = 3;
-	const curveParticleGravity = 3;
+	const curveParticleFadeMinSeconds = 0.5;
+	const curveParticleFadeMaxSeconds = 1.5;
+	const curveParticleGravity = 1;
 	const cameraOrbitMaxRadians = MathUtils.degToRad(30);
 	const waveBeatBoostSpring = 42;
 	const waveBeatBoostDamping = 9;
@@ -694,7 +695,7 @@
 				? 0
 				: side * MathUtils.lerp(0.28, 0.72, Math.random()) +
 					MathUtils.lerp(-0.08, 0.08, Math.random());
-		particle.driftZ = fromCurve ? 0 : MathUtils.lerp(-0.26, 0.12, Math.random());
+		particle.driftZ = fromCurve ? -2 : MathUtils.lerp(-0.26, 0.12, Math.random());
 		particle.lift = fromCurve
 			? 0
 			: MathUtils.lerp(0.8, 2.8, Math.random()) * MathUtils.lerp(1, 8, line.depthT);
@@ -704,9 +705,9 @@
 		particlePositions[offset3] = x;
 		particlePositions[offset3 + 1] = y;
 		particlePositions[offset3 + 2] = z;
-		particleColors[offset3] = line.currentColor.r;
-		particleColors[offset3 + 1] = line.currentColor.g;
-		particleColors[offset3 + 2] = line.currentColor.b;
+		particleColors[offset3] = fromCurve ? 1 : line.currentColor.r;
+		particleColors[offset3 + 1] = fromCurve ? 1 : line.currentColor.g;
+		particleColors[offset3 + 2] = fromCurve ? 1 : line.currentColor.b;
 		particleAlphas[index] = 0.35;
 		particleSizes[index] = particle.size;
 	}
@@ -747,7 +748,7 @@
 
 			if (!shouldEmitCurveParticles) continue;
 
-			const curveCount = curveParticlesPerLine;
+			const curveCount = isMobile ? curveParticlesPerLineMobile : curveParticlesPerLineDesktop;
 			for (let i = 0; i < curveCount; i++) {
 				const curveT = curveCount <= 1 ? 0.5 : i / (curveCount - 1);
 				activateFloatParticle(line, endpointSide(), true, curveT);
@@ -794,7 +795,7 @@
 				particlePositions[offset3] = particle.startX;
 				particlePositions[offset3 + 1] =
 					particle.startY - 0.5 * curveParticleGravity * particle.life * particle.life;
-				particlePositions[offset3 + 2] = particle.startZ;
+				particlePositions[offset3 + 2] = particle.startZ + particle.driftZ * driftEase;
 			} else {
 				particlePositions[offset3] =
 					particle.startX + particle.kickX * kickEase * kickDampen + particle.driftX * driftEase;
