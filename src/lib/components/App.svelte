@@ -5,7 +5,6 @@
 	import { store } from '$lib/store.svelte';
 	import { tracks } from '$lib/tracks';
 	import type { Track, TrackAudio } from '$lib/types';
-	import { onMount } from 'svelte';
 
 	interface Props {
 		currentTrack?: Track | null;
@@ -16,7 +15,7 @@
 	let music = $state<HTMLAudioElement | null>(null);
 	let audioSource = $state<AudioNode | null>(null);
 	let activeVisualizer = $state<'2d' | '3d'>('3d');
-	const freqLow = 20;    // Hz — low frequency cutoff for both visualizers
+	const freqLow = 20; // Hz — low frequency cutoff for both visualizers
 	const freqHigh = 18000; // Hz — high frequency cutoff for both visualizers
 	let typedVisualizerCommand = '';
 	let hasConnectedAnalyserOutput = false;
@@ -44,6 +43,7 @@
 		if (store.audioContext && store.analyser && audioSource) {
 			try {
 				audioSource.connect(store.analyser);
+				// eslint-disable-next-line @typescript-eslint/no-unused-vars
 			} catch (error) {
 				// Ignore duplicate audio graph connections.
 			}

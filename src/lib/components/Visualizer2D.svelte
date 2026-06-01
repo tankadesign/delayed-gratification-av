@@ -12,14 +12,13 @@
 		freqHigh?: number;
 	}
 
-	let { currentTrack = null, music = null, freqLow = 35, freqHigh = 14000 }: Props = $props();
+	let { currentTrack = null, freqLow = 35, freqHigh = 14000 }: Props = $props();
 
 	let app: Application | null = null;
 	let canvasEl = $state<HTMLCanvasElement>();
 	let bufferLength = $state(0);
 	let dataArray = $state<Uint8Array<ArrayBuffer> | null>(null);
 	let ghostArray = $state<Float32Array | null>(null);
-	let xDistance = $state(250);
 	let innerWidth = $state(typeof window === 'undefined' ? 393 : window.innerWidth);
 	let innerHeight = $state(typeof window === 'undefined' ? 660 : window.innerHeight);
 	let resizeHandler: (() => void) | null = null;
@@ -353,7 +352,6 @@ fn mainFragment(
 			fxUniformsY.uniforms.uTime += 0.016;
 			if (store.analyser && dataArray) {
 				store.analyser.getByteFrequencyData(dataArray);
-				xDistance = Math.random() < 0.03 ? 1500 : 250;
 				let forceFire = false;
 				let canFire = Math.random() < 0.7;
 				let spawned = 0;
@@ -362,15 +360,14 @@ fn mainFragment(
 				drawLines(leftGhost, rightGhost, left, right);
 				const sampleRate2d = store.audioContext?.sampleRate ?? 48000;
 				const nyquist2d = sampleRate2d / 2;
-				const lowIdx = Math.max(0, Math.round(freqLow / nyquist2d * bufferLength));
-				const highIdx = Math.min(bufferLength, Math.round(freqHigh / nyquist2d * bufferLength));
+				const lowIdx = Math.max(0, Math.round((freqLow / nyquist2d) * bufferLength));
+				const highIdx = Math.min(bufferLength, Math.round((freqHigh / nyquist2d) * bufferLength));
 				const bandMid = Math.round(lowIdx + (highIdx - lowIdx) * 0.55);
 				for (let i = lowIdx; i < highIdx; i++) {
 					const h = dataArray[i];
 					const pct = h / 255;
 
 					if (i === bandMid && pct > 0.6) {
-						xDistance = 1500;
 						forceFire = Math.random() < 0.65;
 					}
 
@@ -399,8 +396,8 @@ fn mainFragment(
 		const lineGhostDecay = isMobile ? lineGhostDecayMobile : lineGhostDecayDesktop;
 		const sampleRate2d = store.audioContext?.sampleRate ?? 48000;
 		const nyquist2d = sampleRate2d / 2;
-		const lowIdx = Math.max(0, Math.round(freqLow / nyquist2d * bufferLength));
-		const highIdx = Math.min(bufferLength, Math.round(freqHigh / nyquist2d * bufferLength));
+		const lowIdx = Math.max(0, Math.round((freqLow / nyquist2d) * bufferLength));
+		const highIdx = Math.min(bufferLength, Math.round((freqHigh / nyquist2d) * bufferLength));
 		const bandSize = Math.max(1, highIdx - lowIdx);
 		const barHeight = innerHeight / bars;
 		const barWidth = innerWidth / 1.5;
@@ -418,34 +415,46 @@ fn mainFragment(
 			let y = Math.round(i * barHeight);
 			const wGhost = barWidth * ghostPct * 0.98;
 			const w = barWidth * pct;
-			leftGhost.moveTo(0, y).lineTo(wGhost, y).stroke({
-				width: lineHeight + 6,
-				color,
-				alpha: Math.min(0.18, ghostPct * 0.28),
-				join: 'round'
-			});
-			leftGhost.moveTo(0, y).lineTo(wGhost, y).stroke({
-				width: lineHeight + 3,
-				color,
-				alpha: Math.min(0.28, ghostPct * 0.42),
-				join: 'round'
-			});
+			leftGhost
+				.moveTo(0, y)
+				.lineTo(wGhost, y)
+				.stroke({
+					width: lineHeight + 6,
+					color,
+					alpha: Math.min(0.18, ghostPct * 0.28),
+					join: 'round'
+				});
+			leftGhost
+				.moveTo(0, y)
+				.lineTo(wGhost, y)
+				.stroke({
+					width: lineHeight + 3,
+					color,
+					alpha: Math.min(0.28, ghostPct * 0.42),
+					join: 'round'
+				});
 			leftGhost.circle(wGhost * 1.1, y, 4).fill({ color, alpha: Math.min(0.2, ghostPct * 0.3) });
 			left.moveTo(0, y).lineTo(w, y).stroke({ width: lineHeight, color });
 			left.circle(w, y, 3).fill({ color, alpha: pct });
 			y += offsetY;
-			rightGhost.moveTo(0, y).lineTo(wGhost, y).stroke({
-				width: lineHeight + 6,
-				color,
-				alpha: Math.min(0.18, ghostPct * 0.28),
-				join: 'round'
-			});
-			rightGhost.moveTo(0, y).lineTo(wGhost, y).stroke({
-				width: lineHeight + 3,
-				color,
-				alpha: Math.min(0.28, ghostPct * 0.42),
-				join: 'round'
-			});
+			rightGhost
+				.moveTo(0, y)
+				.lineTo(wGhost, y)
+				.stroke({
+					width: lineHeight + 6,
+					color,
+					alpha: Math.min(0.18, ghostPct * 0.28),
+					join: 'round'
+				});
+			rightGhost
+				.moveTo(0, y)
+				.lineTo(wGhost, y)
+				.stroke({
+					width: lineHeight + 3,
+					color,
+					alpha: Math.min(0.28, ghostPct * 0.42),
+					join: 'round'
+				});
 			rightGhost.circle(wGhost * 1.1, y, 4).fill({ color, alpha: Math.min(0.2, ghostPct * 0.3) });
 			right.moveTo(0, y).lineTo(w, y).stroke({ width: lineHeight, color });
 			right.circle(w, y, 3).fill({ color, alpha: pct });

@@ -8,8 +8,8 @@ declare global {
 		// interface Platform {}
 	}
 	interface Window {
-		webkitAudioContext: AudioContext
+		webkitAudioContext: AudioContext;
 	}
 }
 
-export { };
+export {};

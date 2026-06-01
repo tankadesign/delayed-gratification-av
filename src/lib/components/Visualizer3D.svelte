@@ -133,27 +133,37 @@
 	let waveAmplitude = $state(60);
 	let waveFloor = $state(0);
 
-	const lineGhostDecayDesktop = 0.992;
-	const lineGhostDecayMobile = 0.988;
-	const lineCountDesktop = 60;
-	const lineCountMobile = 26;
-	const maxFloatParticlesDesktop = 100_000;
-	const maxFloatParticlesMobile = 6000;
-	const particleEmissionRateScale = 0.34;
-	const curveParticlesPerLineDesktop = 128;
-	const curveParticlesPerLineMobile = 32;
-	const curveParticlePulseThreshold = 0.6;
-	const curveParticleHoldSeconds = 0.45;
-	const curveParticleFadeMinSeconds = 0.5;
-	const curveParticleFadeMaxSeconds = 1.5;
-	const curveParticleGravity = 1;
-	const cameraOrbitMaxRadians = MathUtils.degToRad(30);
-	const waveBeatBoostSpring = 42;
-	const waveBeatBoostDamping = 9;
-	const lineCurveSegments = 80;
-	const curveScratch = new Float32Array(lineCurveSegments + 1);
-	const historyCapacity = 256;
-	const historyWindow = 1.0; // seconds of frequency history shown per line
+	const config = {
+		lineGhostDecayDesktop: 0.992,
+		lineGhostDecayMobile: 0.988,
+		lineCountDesktop: 60,
+		lineCountMobile: 26,
+		maxFloatParticlesDesktop: 100_000,
+		maxFloatParticlesMobile: 6000,
+		particleEmissionRateScale: 0.34,
+		curveParticlesPerLineDesktop: 128,
+		curveParticlesPerLineMobile: 32,
+		curveParticlePulseThreshold: 0.6,
+		curveParticleHoldSeconds: 0.45,
+		curveParticleFadeMinSeconds: 0.5,
+		curveParticleFadeMaxSeconds: 1.5,
+		curveParticleGravity: 1,
+		cameraOrbitMaxRadians: MathUtils.degToRad(30),
+		waveBeatBoostSpring: 42,
+		waveBeatBoostDamping: 9,
+		lineCurveSegments: 80,
+		historyCapacity: 256,
+		historyWindow: 1.0 // seconds of frequency history shown per line
+	} as const;
+
+	const curveScratch = new Float32Array(config.lineCurveSegments + 1);
+
+	const colors = {
+		red: new Color(0xff184c),
+		blue: new Color(0x1887ff),
+		white: new Color(0xffffff)
+	} as const;
+
 	let avgDeltaTime = 1 / 60;
 	const atmosphereShader = {
 		uniforms: {
@@ -255,11 +265,11 @@
 	function sampleLineGradient(t: number, stops: string[], pulse: number) {
 		const colorStops = stops.length
 			? stops.map((stop) => new Color(stop))
-			: [new Color('#ff184c'), new Color('#1887ff')];
+			: [colors.red, colors.blue];
 		const scaled = MathUtils.clamp(t, 0, 1) * (colorStops.length - 1);
 		const index = Math.min(colorStops.length - 2, Math.floor(scaled));
 		const color = colorStops[index].clone().lerp(colorStops[index + 1], scaled - index);
-		return color.lerp(new Color('#ffffff'), pulse * 0.1);
+		return color.lerp(colors.white, pulse * 0.1);
 	}
 
 	function readSceneEnergy(delta: number) {
@@ -273,13 +283,12 @@
 			Math.max(0, bass - smoothedBass * 0.84) + Math.max(0, mid - smoothedMid * 0.9);
 		smoothedTransient = MathUtils.lerp(smoothedTransient, rawTransient, Math.min(1, delta * 16));
 		scenePulse = Math.max(scenePulse * Math.pow(0.18, delta), smoothedTransient * 3.6);
-		
 	}
 
 	function createLineStripGeometry() {
-		const positions = new Float32Array((lineCurveSegments + 1) * 2 * 3);
+		const positions = new Float32Array((config.lineCurveSegments + 1) * 2 * 3);
 		const indices: number[] = [];
-		for (let i = 0; i < lineCurveSegments; i++) {
+		for (let i = 0; i < config.lineCurveSegments; i++) {
 			const a = i * 2;
 			const b = a + 1;
 			const c = a + 2;
@@ -301,7 +310,7 @@
 		curveOffsets: Float32Array
 	) {
 		const positions = geometry.attributes.position.array as Float32Array;
-		const n = lineCurveSegments + 1;
+		const n = config.lineCurveSegments + 1;
 		// Smooth display offsets only — endpoints anchored so tip positions stay correct
 		for (let i = 0; i < n; i++) curveScratch[i] = curveOffsets[i];
 		for (let pass = 0; pass < 3; pass++) {
@@ -310,8 +319,8 @@
 					curveScratch[i - 1] * 0.25 + curveScratch[i] * 0.5 + curveScratch[i + 1] * 0.25;
 			}
 		}
-		for (let i = 0; i <= lineCurveSegments; i++) {
-			const t = i / lineCurveSegments;
+		for (let i = 0; i <= config.lineCurveSegments; i++) {
+			const t = i / config.lineCurveSegments;
 			const x = MathUtils.lerp(-halfLength, halfLength, t);
 			const y = curveScratch[i];
 			const offset = i * 6;
@@ -345,7 +354,7 @@
 			lineTipGeometry = new SphereGeometry(0.085, 12, 10);
 		}
 
-		const targetCount = isMobile ? lineCountMobile : lineCountDesktop;
+		const targetCount = isMobile ? config.lineCountMobile : config.lineCountDesktop;
 		const count = Math.max(18, Math.min(bufferLength || targetCount, targetCount));
 		if (!ghostArray || ghostArray.length !== count) {
 			ghostArray = new Float32Array(count);
@@ -419,8 +428,8 @@
 				emissionCarry: 0,
 				smoothedPeak: 0,
 				agcPeak: 0,
-				curveOffsets: new Float32Array(lineCurveSegments + 1),
-				historyBuffer: new Float32Array(historyCapacity),
+				curveOffsets: new Float32Array(config.lineCurveSegments + 1),
+				historyBuffer: new Float32Array(config.historyCapacity),
 				historyHead: 0,
 				historyCount: 0
 			});
@@ -456,7 +465,7 @@
 		particleGeometry?.dispose();
 		particleMaterial?.dispose();
 
-		const count = isMobile ? maxFloatParticlesMobile : maxFloatParticlesDesktop;
+		const count = isMobile ? config.maxFloatParticlesMobile : config.maxFloatParticlesDesktop;
 		particlePositions = new Float32Array(count * 3);
 		particleColors = new Float32Array(count * 3);
 		particleAlphas = new Float32Array(count);
@@ -547,12 +556,10 @@
 			Math.sin(t * 0.0412 + 1.31) * 0.12 +
 			Math.sin(t * 0.0171 + 2.73) * 0.08;
 		const targetVelX =
-			Math.sin(t * 0.0283 + 0.94) * 0.10 +
+			Math.sin(t * 0.0283 + 0.94) * 0.1 +
 			Math.sin(t * 0.0591 + 3.15) * 0.06 +
 			Math.sin(t * 0.0131 + 1.82) * 0.07;
-		const targetVelZ =
-			Math.sin(t * 0.0523 + 0.40) * 0.04 +
-			Math.sin(t * 0.0198 + 2.10) * 0.03;
+		const targetVelZ = Math.sin(t * 0.0523 + 0.4) * 0.04 + Math.sin(t * 0.0198 + 2.1) * 0.03;
 		rotVelY = MathUtils.lerp(rotVelY, targetVelY, Math.min(1, delta * 1.2));
 		// Spring restoring forces on X and Z keep scene from drifting off-screen;
 		// Y is free to accumulate as a panoramic turntable rotation.
@@ -580,9 +587,9 @@
 			cameraOrigin.y - cameraTargetPosition.y,
 			cameraOrigin.z - cameraTargetPosition.z
 		);
-		orbitOffset.applyAxisAngle(new Vector3(0, 1, 0), cameraOrbitX * cameraOrbitMaxRadians);
+		orbitOffset.applyAxisAngle(new Vector3(0, 1, 0), cameraOrbitX * config.cameraOrbitMaxRadians);
 		const pitchAxis = new Vector3().crossVectors(new Vector3(0, 1, 0), orbitOffset).normalize();
-		orbitOffset.applyAxisAngle(pitchAxis, cameraOrbitY * cameraOrbitMaxRadians);
+		orbitOffset.applyAxisAngle(pitchAxis, cameraOrbitY * config.cameraOrbitMaxRadians);
 		camera.position.copy(baseCameraTarget).add(orbitOffset);
 		// Always look at the world-space centre of the scene objects
 		const sceneCenter = groundGroup
@@ -606,22 +613,21 @@
 
 	function updateWaveformBoost(delta: number) {
 		const acceleration =
-			-waveBeatBoost * waveBeatBoostSpring - waveBeatBoostVelocity * waveBeatBoostDamping;
+			-waveBeatBoost * config.waveBeatBoostSpring -
+			waveBeatBoostVelocity * config.waveBeatBoostDamping;
 		waveBeatBoostVelocity += acceleration * delta;
 		waveBeatBoost += waveBeatBoostVelocity * delta;
 		waveBeatBoost = Math.max(0, waveBeatBoost);
 	}
-
-
 
 	function endpointSide() {
 		return Math.random() < 0.5 ? -1 : 1;
 	}
 
 	function getCurveSpawn(line: LineNode, t: number) {
-		const seg = t * lineCurveSegments;
+		const seg = t * config.lineCurveSegments;
 		const seg0 = Math.floor(seg);
-		const seg1 = Math.min(lineCurveSegments, seg0 + 1);
+		const seg1 = Math.min(config.lineCurveSegments, seg0 + 1);
 		const segFrac = seg - seg0;
 		const x = MathUtils.lerp(-line.currentHalfLength, line.currentHalfLength, t);
 		const y =
@@ -673,9 +679,13 @@
 		particle.active = true;
 		particle.fromCurve = fromCurve;
 		particle.life = 0;
-		particle.holdTime = fromCurve ? curveParticleHoldSeconds : 0;
+		particle.holdTime = fromCurve ? config.curveParticleHoldSeconds : 0;
 		particle.fadeDuration = fromCurve
-			? MathUtils.lerp(curveParticleFadeMinSeconds, curveParticleFadeMaxSeconds, Math.random())
+			? MathUtils.lerp(
+					config.curveParticleFadeMinSeconds,
+					config.curveParticleFadeMaxSeconds,
+					Math.random()
+				)
 			: 0;
 		particle.maxLife = fromCurve
 			? particle.holdTime + particle.fadeDuration
@@ -690,16 +700,17 @@
 		particle.kickX = side * Math.cos(domeAzimuth) * Math.cos(domeElevation) * kickMagnitude;
 		particle.kickY = Math.sin(domeElevation) * kickMagnitude;
 		particle.kickZ = Math.sin(domeAzimuth) * Math.cos(domeElevation) * kickMagnitude;
-		particle.driftX =
-			fromCurve
-				? 0
-				: side * MathUtils.lerp(0.28, 0.72, Math.random()) +
-					MathUtils.lerp(-0.08, 0.08, Math.random());
+		particle.driftX = fromCurve
+			? 0
+			: side * MathUtils.lerp(0.28, 0.72, Math.random()) +
+				MathUtils.lerp(-0.08, 0.08, Math.random());
 		particle.driftZ = fromCurve ? -2 : MathUtils.lerp(-0.26, 0.12, Math.random());
 		particle.lift = fromCurve
 			? 0
 			: MathUtils.lerp(0.8, 2.8, Math.random()) * MathUtils.lerp(1, 8, line.depthT);
-		particle.size = MathUtils.lerp(isMobile ? 1.8 : 2.2, isMobile ? 4.4 : 5.8, Math.random()) * (fromCurve ? .5 : 1);
+		particle.size =
+			MathUtils.lerp(isMobile ? 1.8 : 2.2, isMobile ? 4.4 : 5.8, Math.random()) *
+			(fromCurve ? 0.5 : 1);
 
 		const offset3 = index * 3;
 		particlePositions[offset3] = x;
@@ -728,13 +739,13 @@
 		const minRate = Math.max(0, Math.min(particleMinPerLine, particleMaxPerLine));
 		const maxRate = Math.max(minRate, Math.max(particleMinPerLine, particleMaxPerLine));
 		const shouldEmitCurveParticles =
-			scenePulse >= curveParticlePulseThreshold &&
-			previousCurveParticleScenePulse < curveParticlePulseThreshold;
+			scenePulse >= config.curveParticlePulseThreshold &&
+			previousCurveParticleScenePulse < config.curveParticlePulseThreshold;
 		for (const line of lines) {
 			if (line.currentHalfLength <= 0.001) continue;
 			const activityBurst = Math.pow(MathUtils.clamp(line.activity, 0, 1), 2.2);
 			const ratePerSecond =
-				MathUtils.lerp(minRate, maxRate, activityBurst) * particleEmissionRateScale;
+				MathUtils.lerp(minRate, maxRate, activityBurst) * config.particleEmissionRateScale;
 			line.emissionCarry += ratePerSecond * delta;
 			if (Math.random() < activityBurst * delta * 5.5) {
 				line.emissionCarry += MathUtils.lerp(1, 5, activityBurst);
@@ -748,7 +759,9 @@
 
 			if (!shouldEmitCurveParticles) continue;
 
-			const curveCount = isMobile ? curveParticlesPerLineMobile : curveParticlesPerLineDesktop;
+			const curveCount = isMobile
+				? config.curveParticlesPerLineMobile
+				: config.curveParticlesPerLineDesktop;
 			for (let i = 0; i < curveCount; i++) {
 				const curveT = curveCount <= 1 ? 0.5 : i / (curveCount - 1);
 				activateFloatParticle(line, endpointSide(), true, curveT);
@@ -789,12 +802,14 @@
 				? particle.life <= particle.holdTime
 					? 1
 					: 1 - (particle.life - particle.holdTime) / particle.fadeDuration
-				: lifeT < 0.72 ? 1 : 1 - (lifeT - 0.72) / 0.28;
+				: lifeT < 0.72
+					? 1
+					: 1 - (lifeT - 0.72) / 0.28;
 
 			if (particle.fromCurve) {
 				particlePositions[offset3] = particle.startX;
 				particlePositions[offset3 + 1] =
-					particle.startY - 0.5 * curveParticleGravity * particle.life * particle.life;
+					particle.startY - 0.5 * config.curveParticleGravity * particle.life * particle.life;
 				particlePositions[offset3 + 2] = particle.startZ + particle.driftZ * driftEase;
 			} else {
 				particlePositions[offset3] =
@@ -873,18 +888,24 @@
 		if (!dataArray || !lines.length) return;
 
 		const gradientStops = currentTrack?.gradientStops ?? ['#ff184c', '#1887ff'];
-		const decay = isMobile ? lineGhostDecayMobile : lineGhostDecayDesktop;
+		const decay = isMobile ? config.lineGhostDecayMobile : config.lineGhostDecayDesktop;
 		updateWaveformBoost(delta);
 
 		const sampleRate = store.audioContext?.sampleRate ?? 48000;
 		const nyquist = sampleRate / 2;
-		const freqBandLow = Math.max(0, Math.round(freqLow / nyquist * (dataArray.length - 1)));
-		const freqBandHigh = Math.min(dataArray.length - 1, Math.round(freqHigh / nyquist * (dataArray.length - 1)));
+		const freqBandLow = Math.max(0, Math.round((freqLow / nyquist) * (dataArray.length - 1)));
+		const freqBandHigh = Math.min(
+			dataArray.length - 1,
+			Math.round((freqHigh / nyquist) * (dataArray.length - 1))
+		);
 
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
 			const centerIndex = Math.round(MathUtils.lerp(freqBandLow, freqBandHigh, line.spectrumT));
-			const bandRadius = Math.max(1, Math.floor((freqBandHigh - freqBandLow) / Math.max(18, lines.length) / 2));
+			const bandRadius = Math.max(
+				1,
+				Math.floor((freqBandHigh - freqBandLow) / Math.max(18, lines.length) / 2)
+			);
 			const sampleStart = Math.max(0, centerIndex - bandRadius);
 			const sampleEnd = Math.min(dataArray.length, centerIndex + bandRadius + 1);
 			let sampleTotal = 0;
@@ -917,44 +938,61 @@
 				line.smoothedPeak = centeredPct;
 			}
 			// Asymmetric EMA: fast attack captures transients, slow release keeps dips visible (Option B)
-			const smoothAlpha = centeredPct >= line.smoothedPeak
-				? Math.min(1, delta * 4)      // fast attack τ ≈ 0.25s
-				: Math.min(1, delta * 0.35);  // slow release τ ≈ 2.86s
+			const smoothAlpha =
+				centeredPct >= line.smoothedPeak
+					? Math.min(1, delta * 4) // fast attack τ ≈ 0.25s
+					: Math.min(1, delta * 0.35); // slow release τ ≈ 2.86s
 			line.smoothedPeak = MathUtils.lerp(line.smoothedPeak, centeredPct, smoothAlpha);
 			const rawDeviation = centeredPct - line.smoothedPeak;
 			// AGC: asymmetric peak tracker — fast attack on new peaks, slow release builds gain during quiet passages (Option A)
 			const absDeviation = Math.abs(rawDeviation);
-			const agcAlpha = absDeviation > line.agcPeak
-				? Math.min(1, delta * 10)    // fast attack τ ≈ 0.1s
-				: Math.min(1, delta * 0.15); // slow release τ ≈ 6.7s
+			const agcAlpha =
+				absDeviation > line.agcPeak
+					? Math.min(1, delta * 10) // fast attack τ ≈ 0.1s
+					: Math.min(1, delta * 0.15); // slow release τ ≈ 6.7s
 			line.agcPeak = Math.max(0.003, MathUtils.lerp(line.agcPeak, absDeviation, agcAlpha));
 			const agcGain = Math.min(20, 0.06 / line.agcPeak);
 			line.historyBuffer[line.historyHead] = rawDeviation * agcGain;
-			line.historyHead = (line.historyHead + 1) % historyCapacity;
-			line.historyCount = Math.min(line.historyCount + 1, historyCapacity);
+			line.historyHead = (line.historyHead + 1) % config.historyCapacity;
+			line.historyCount = Math.min(line.historyCount + 1, config.historyCapacity);
 			// Center-out mapping: center = newest sample, both edges = oldest (symmetric waveform)
-			const samplesInWindow = Math.max(2, Math.min(line.historyCount, Math.round(historyWindow / avgDeltaTime)));
+			const samplesInWindow = Math.max(
+				2,
+				Math.min(line.historyCount, Math.round(config.historyWindow / avgDeltaTime))
+			);
 			const displayScale =
 				viewportWidthAtLine *
 				MathUtils.lerp(0.003, 0.038, waveAmplitude / 10) *
 				(1 + Math.min(2.4, waveBeatBoost));
-			const halfSegs = lineCurveSegments / 2;
+			const halfSegs = config.lineCurveSegments / 2;
 			// Power-curve floor lift: quiet signals expand toward the noise floor, peaks unchanged.
 			// waveFloor=0 → exponent 1.0 (no change); waveFloor=10 → exponent 0.2 (strong lift).
 			const floorPow = MathUtils.lerp(1.0, 0.2, waveFloor / 10);
-			for (let seg = 0; seg <= lineCurveSegments; seg++) {
+			for (let seg = 0; seg <= config.lineCurveSegments; seg++) {
 				const distFromCenter = Math.abs(seg - halfSegs);
 				const t_age = distFromCenter / halfSegs; // 0 = center/newest, 1 = edge/oldest
 				const rawAge = t_age * (samplesInWindow - 1);
 				const ageFloor = Math.floor(rawAge);
 				const ageFrac = rawAge - ageFloor;
-				const idx0 = ((line.historyHead - 1 - ageFloor) % historyCapacity + historyCapacity) % historyCapacity;
-				const idx1 = ((line.historyHead - 2 - ageFloor) % historyCapacity + historyCapacity) % historyCapacity;
-				const historicValue = MathUtils.lerp(line.historyBuffer[idx0], line.historyBuffer[idx1], ageFrac);
+				const idx0 =
+					(((line.historyHead - 1 - ageFloor) % config.historyCapacity) + config.historyCapacity) %
+					config.historyCapacity;
+				const idx1 =
+					(((line.historyHead - 2 - ageFloor) % config.historyCapacity) + config.historyCapacity) %
+					config.historyCapacity;
+				const historicValue = MathUtils.lerp(
+					line.historyBuffer[idx0],
+					line.historyBuffer[idx1],
+					ageFrac
+				);
 				const mag = Math.abs(historicValue);
 				const lifted = mag > 0 ? Math.pow(mag, floorPow) : 0;
 				const target = Math.sign(historicValue) * lifted * displayScale;
-				line.curveOffsets[seg] = MathUtils.lerp(line.curveOffsets[seg], target, Math.min(1, delta * 18));
+				line.curveOffsets[seg] = MathUtils.lerp(
+					line.curveOffsets[seg],
+					target,
+					Math.min(1, delta * 18)
+				);
 			}
 			const yLift = pulse * MathUtils.lerp(0.01, 0.08, nearWeight);
 			// Fixed half-length — only varies by depth position, not by frequency activity
@@ -965,12 +1003,7 @@
 			const coreRadius = shellRadius * 0.05;
 
 			line.group.position.y = line.baseY + yLift;
-			updateLineStripGeometry(
-				line.shell.geometry,
-				fixedHalfLength,
-				shellRadius,
-				line.curveOffsets
-			);
+			updateLineStripGeometry(line.shell.geometry, fixedHalfLength, shellRadius, line.curveOffsets);
 			updateLineStripGeometry(
 				line.core.geometry,
 				fixedHalfLength * 0.95,
@@ -981,7 +1014,7 @@
 			const coreHalfLength = fixedHalfLength * 0.95;
 			line.tipRight.position.set(
 				coreHalfLength - coreRadius * 0.15,
-				line.curveOffsets[lineCurveSegments],
+				line.curveOffsets[config.lineCurveSegments],
 				0
 			);
 			line.tipRight.scale.setScalar(Math.max(0.001, tipScale));

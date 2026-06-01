@@ -131,7 +131,7 @@
 			scrubPct = (pct / 100) * duration < 10 ? 0 : pct;
 		}
 	}
-	function jumpToPosition(e: MouseEvent) {
+	function jumpToPosition() {
 		if (audioEl) {
 			const t = (scrubPct / 100) * duration;
 			audioEl.currentTime = t;
