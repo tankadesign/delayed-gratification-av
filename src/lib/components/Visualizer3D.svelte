@@ -958,7 +958,7 @@
 			}
 			const yLift = pulse * MathUtils.lerp(0.01, 0.08, nearWeight);
 			// Fixed half-length — only varies by depth position, not by frequency activity
-			const fixedHalfLength = 0.5 * viewportWidthAtLine * MathUtils.lerp(0.04, 0.18, nearWeight);
+			const fixedHalfLength = 0.8 * viewportWidthAtLine * MathUtils.lerp(0.04, 0.18, nearWeight);
 			const shellRadius =
 				viewportWidthAtLine * MathUtils.lerp(0.00022, 0.00078, nearWeight) +
 				MathUtils.lerp(0.005, 0.012, nearWeight);
