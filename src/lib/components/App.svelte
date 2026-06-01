@@ -15,22 +15,26 @@
 	let music = $state<HTMLAudioElement | null>(null);
 	let audioSource = $state<AudioNode | null>(null);
 	let activeVisualizer = $state<'2d' | '3d'>('3d');
+	let isInterfaceHidden = $state(false);
+	let hasConnectedAnalyserOutput = $state(false);
+
 	const freqLow = 20; // Hz — low frequency cutoff for both visualizers
 	const freqHigh = 18000; // Hz — high frequency cutoff for both visualizers
-	let typedVisualizerCommand = '';
-	let hasConnectedAnalyserOutput = false;
 
 	function onVisualizerKeydown(event: KeyboardEvent) {
-		if (event.metaKey || event.ctrlKey || event.altKey) return;
-		if (event.key.length !== 1) return;
-
-		typedVisualizerCommand = (typedVisualizerCommand + event.key.toLowerCase()).slice(-2);
-		if (typedVisualizerCommand === '3d') {
-			activeVisualizer = '3d';
-			typedVisualizerCommand = '';
-		} else if (typedVisualizerCommand === '2d') {
-			activeVisualizer = '2d';
-			typedVisualizerCommand = '';
+		switch (event.key) {
+			case 'i':
+				isInterfaceHidden = !isInterfaceHidden;
+				break;
+			case '2':
+				activeVisualizer = '2d';
+				break;
+			case '3':
+				activeVisualizer = '3d';
+				break;
+			case 'Escape':
+				isInterfaceHidden = false;
+				break;
 		}
 	}
 
@@ -85,7 +89,6 @@
 
 	function switchDimension() {
 		activeVisualizer = activeVisualizer === '2d' ? '3d' : '2d';
-		typedVisualizerCommand = '';
 	}
 </script>
 
@@ -99,6 +102,7 @@
 <button
 	class="dimension-switch"
 	class:is-3d={activeVisualizer === '3d'}
+	class:hidden={isInterfaceHidden}
 	onclick={switchDimension}
 	aria-label={activeVisualizer === '2d' ? 'Switch to 3D visualizer' : 'Switch to 2D visualizer'}
 >
@@ -112,7 +116,7 @@
 		/>
 	</svg>
 </button>
-<div class="wrap">
+<div class="wrap" class:hidden={isInterfaceHidden}>
 	<div class="text">
 		<h1>j.Falcon</h1>
 		<h2>Undefined</h2>
@@ -139,6 +143,14 @@
 		flex-direction: column;
 		position: relative;
 		z-index: 1;
+	}
+	.wrap,
+	.dimension-switch {
+		transition: opacity 0.5s ease;
+	}
+	.hidden {
+		opacity: 0;
+		pointer-events: none;
 	}
 	.list {
 		max-width: 440px;
