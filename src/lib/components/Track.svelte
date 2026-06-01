@@ -70,7 +70,7 @@
 			const ctx = new (window.AudioContext || window.webkitAudioContext)();
 			store.audioContext = ctx;
 			const a = store.audioContext!.createAnalyser();
-			a.fftSize = store.bars;
+			a.fftSize = 2048;
 			a.smoothingTimeConstant = 0.95;
 			store.analyser = a;
 		}

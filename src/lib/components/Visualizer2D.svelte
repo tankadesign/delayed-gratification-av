@@ -8,9 +8,11 @@
 	interface Props {
 		currentTrack?: Track | null;
 		music?: HTMLAudioElement | null;
+		freqLow?: number;
+		freqHigh?: number;
 	}
 
-	let { currentTrack = null, music = null }: Props = $props();
+	let { currentTrack = null, music = null, freqLow = 35, freqHigh = 14000 }: Props = $props();
 
 	let app: Application | null = null;
 	let canvasEl = $state<HTMLCanvasElement>();
@@ -28,6 +30,7 @@
 	const lineGhostDecayDesktop = 0.995;
 	const lineGhostDecayMobile = 0.995;
 	const lineGhostYOffset = 5;
+	const bars = 64;
 
 	const filterVertexSource = `in vec2 aPosition;
 out vec2 vTextureCoord;
@@ -357,11 +360,16 @@ fn mainFragment(
 				const maxCircles = isMobile ? maxCirclesMobile : maxCirclesDesktop;
 				const spawnBudget = isMobile ? maxSpawnPerFrameMobile : maxSpawnPerFrameDesktop;
 				drawLines(leftGhost, rightGhost, left, right);
-				for (let i = 0; i < bufferLength; i++) {
+				const sampleRate2d = store.audioContext?.sampleRate ?? 48000;
+				const nyquist2d = sampleRate2d / 2;
+				const lowIdx = Math.max(0, Math.round(freqLow / nyquist2d * bufferLength));
+				const highIdx = Math.min(bufferLength, Math.round(freqHigh / nyquist2d * bufferLength));
+				const bandMid = Math.round(lowIdx + (highIdx - lowIdx) * 0.55);
+				for (let i = lowIdx; i < highIdx; i++) {
 					const h = dataArray[i];
 					const pct = h / 255;
 
-					if (i === Math.round(bufferLength * 0.55) && pct > 0.6) {
+					if (i === bandMid && pct > 0.6) {
 						xDistance = 1500;
 						forceFire = Math.random() < 0.65;
 					}
@@ -389,16 +397,22 @@ fn mainFragment(
 		right.x = innerWidth;
 		const hue = currentTrack?.hue ?? 150;
 		const lineGhostDecay = isMobile ? lineGhostDecayMobile : lineGhostDecayDesktop;
-		const barHeight = innerHeight / (store.bars / 2);
+		const sampleRate2d = store.audioContext?.sampleRate ?? 48000;
+		const nyquist2d = sampleRate2d / 2;
+		const lowIdx = Math.max(0, Math.round(freqLow / nyquist2d * bufferLength));
+		const highIdx = Math.min(bufferLength, Math.round(freqHigh / nyquist2d * bufferLength));
+		const bandSize = Math.max(1, highIdx - lowIdx);
+		const barHeight = innerHeight / bars;
 		const barWidth = innerWidth / 1.5;
 		const lineHeight = 1;
-		for (let i = 0; i < bufferLength; i++) {
-			const h = dataArray?.[i] ?? 0;
+		for (let i = 0; i < bars; i++) {
+			const sampleIdx = Math.min(bufferLength - 1, lowIdx + Math.floor((i / bars) * bandSize));
+			const h = dataArray?.[sampleIdx] ?? 0;
 			const pct = h / 255;
-			const prevGhost = ghostArray?.[i] ?? 0;
+			const prevGhost = ghostArray?.[sampleIdx] ?? 0;
 			const ghostPct = Math.max(pct, prevGhost * lineGhostDecay);
-			if (ghostArray) ghostArray[i] = ghostPct;
-			const vPct = i / bufferLength;
+			if (ghostArray) ghostArray[sampleIdx] = ghostPct;
+			const vPct = i / bars;
 			const color = `hsl(${Math.round(vPct * hue + hue)}, ${Math.round(vPct * 60 + 40)}%, ${Math.round(vPct * 60 + 25)}%)`;
 			const offsetY = Math.round((barHeight - lineHeight) / 2);
 			let y = Math.round(i * barHeight);

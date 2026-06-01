@@ -31,6 +31,8 @@
 	interface Props {
 		currentTrack?: Track | null;
 		music?: HTMLAudioElement | null;
+		freqLow?: number;
+		freqHigh?: number;
 	}
 
 	interface LineNode {
@@ -50,6 +52,7 @@
 		activity: number;
 		emissionCarry: number;
 		smoothedPeak: number;
+		agcPeak: number;
 		curveOffsets: Float32Array;
 		historyBuffer: Float32Array;
 		historyHead: number;
@@ -72,16 +75,7 @@
 		size: number;
 	}
 
-	interface SceneEnergy {
-		bass: number;
-		mid: number;
-		high: number;
-		presence800to2k: number;
-		intensity: number;
-		transient: number;
-	}
-
-	let { currentTrack = null, music = null }: Props = $props();
+	let { currentTrack = null, music = null, freqLow = 35, freqHigh = 14000 }: Props = $props();
 
 	let bufferLength = $state(0);
 	let dataArray = $state<Uint8Array<ArrayBuffer> | null>(null);
@@ -121,7 +115,6 @@
 	let previousFrameTime = 0;
 	let smoothedBass = 0;
 	let smoothedMid = 0;
-	let smoothedHigh = 0;
 	let smoothedTransient = 0;
 	let scenePulse = 0;
 	let rotY = 0;
@@ -133,7 +126,8 @@
 	let particleMinPerLine = $state(0);
 	let particleMaxPerLine = $state(70);
 	let showParticleTuning = $state(false);
-	let waveAmplitude = $state(12);
+	let waveAmplitude = $state(60);
+	let waveFloor = $state(0);
 
 	const lineGhostDecayDesktop = 0.992;
 	const lineGhostDecayMobile = 0.988;
@@ -148,7 +142,7 @@
 	const lineCurveSegments = 80;
 	const curveScratch = new Float32Array(lineCurveSegments + 1);
 	const historyCapacity = 256;
-	const historyWindow = 5.0; // seconds of frequency history shown per line
+	const historyWindow = 1.0; // seconds of frequency history shown per line
 	let avgDeltaTime = 1 / 60;
 	const atmosphereShader = {
 		uniforms: {
@@ -247,28 +241,6 @@
 		return count ? total / (count * 255) : 0;
 	}
 
-	function averageFrequencyBand(startHz: number, endHz: number) {
-		if (!dataArray?.length) return 0;
-		const sampleRate = store.audioContext?.sampleRate ?? 48000;
-		const nyquist = sampleRate * 0.5;
-		const maxIndex = dataArray.length - 1;
-		const startIndex = Math.max(
-			0,
-			Math.min(maxIndex, Math.floor((startHz / nyquist) * dataArray.length))
-		);
-		const endIndex = Math.max(
-			startIndex + 1,
-			Math.min(maxIndex + 1, Math.ceil((endHz / nyquist) * dataArray.length))
-		);
-		let total = 0;
-		let count = 0;
-		for (let i = startIndex; i < endIndex; i++) {
-			total += dataArray[i];
-			count += 1;
-		}
-		return count ? total / (count * 255) : 0;
-	}
-
 	function sampleLineGradient(t: number, stops: string[], pulse: number) {
 		const colorStops = stops.length
 			? stops.map((stop) => new Color(stop))
@@ -279,30 +251,17 @@
 		return color.lerp(new Color('#ffffff'), pulse * 0.1);
 	}
 
-	function readSceneEnergy(delta: number): SceneEnergy {
+	function readSceneEnergy(delta: number) {
 		const bass = averageRange(0.01, 0.12);
 		const mid = averageRange(0.12, 0.36);
-		const high = averageRange(0.36, 0.72);
-		const presence800to2k = averageFrequencyBand(800, 2000);
-		const intensity = averageRange(0.02, 0.8);
 
 		smoothedBass = MathUtils.lerp(smoothedBass, bass, Math.min(1, delta * 10));
 		smoothedMid = MathUtils.lerp(smoothedMid, mid, Math.min(1, delta * 9));
-		smoothedHigh = MathUtils.lerp(smoothedHigh, high, Math.min(1, delta * 8));
 
 		const rawTransient =
 			Math.max(0, bass - smoothedBass * 0.84) + Math.max(0, mid - smoothedMid * 0.9);
 		smoothedTransient = MathUtils.lerp(smoothedTransient, rawTransient, Math.min(1, delta * 16));
 		scenePulse = Math.max(scenePulse * Math.pow(0.18, delta), smoothedTransient * 3.6);
-
-		return {
-			bass,
-			mid,
-			high,
-			presence800to2k,
-			intensity,
-			transient: Math.min(1, smoothedTransient * 2.8)
-		};
 	}
 
 	function createLineStripGeometry() {
@@ -447,6 +406,7 @@
 				activity: 0,
 				emissionCarry: 0,
 				smoothedPeak: 0,
+				agcPeak: 0,
 				curveOffsets: new Float32Array(lineCurveSegments + 1),
 				historyBuffer: new Float32Array(historyCapacity),
 				historyHead: 0,
@@ -832,17 +792,22 @@
 		setupGroundLines();
 	}
 
-	function updateGroundLines(energy: SceneEnergy, time: number, delta: number, audioTime: number) {
+	function updateGroundLines(delta: number) {
 		if (!dataArray || !lines.length) return;
 
 		const gradientStops = currentTrack?.gradientStops ?? ['#ff184c', '#1887ff'];
 		const decay = isMobile ? lineGhostDecayMobile : lineGhostDecayDesktop;
 		updateWaveformBoost(delta);
 
+		const sampleRate = store.audioContext?.sampleRate ?? 48000;
+		const nyquist = sampleRate / 2;
+		const freqBandLow = Math.max(0, Math.round(freqLow / nyquist * (dataArray.length - 1)));
+		const freqBandHigh = Math.min(dataArray.length - 1, Math.round(freqHigh / nyquist * (dataArray.length - 1)));
+
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
-			const centerIndex = Math.round(line.spectrumT * (dataArray.length - 1));
-			const bandRadius = Math.max(1, Math.floor(dataArray.length / Math.max(18, lines.length) / 2));
+			const centerIndex = Math.round(MathUtils.lerp(freqBandLow, freqBandHigh, line.spectrumT));
+			const bandRadius = Math.max(1, Math.floor((freqBandHigh - freqBandLow) / Math.max(18, lines.length) / 2));
 			const sampleStart = Math.max(0, centerIndex - bandRadius);
 			const sampleEnd = Math.min(dataArray.length, centerIndex + bandRadius + 1);
 			let sampleTotal = 0;
@@ -869,71 +834,81 @@
 			const activity = Math.min(1, widthDrive * 1.1 + ghostCurve * 0.9 + pulse * 0.35);
 			line.activity = MathUtils.lerp(line.activity, activity, Math.min(1, delta * 12));
 			const viewportWidthAtLine = getViewportWidthAtZ(line.group.position.z);
-			// Advance slow baseline so the stored deviation oscillates around zero
-			line.smoothedPeak = MathUtils.lerp(line.smoothedPeak, peakPct, Math.min(1, delta * 1.5));
-			// Bake current beat boost into the sample so historical left-end values aren't
-			// re-scaled by future beats when read back for display
-			const beatBoostedSample = (peakPct - line.smoothedPeak) * (1 + Math.min(2.4, waveBeatBoost));
-			// Record this frame's amplitude into the line's history ring buffer
-			line.historyBuffer[line.historyHead] = beatBoostedSample;
+			// Center signal: 0.5 audio → 0 Y, 0 → -1, 1 → +1
+			const centeredPct = (peakPct - 0.5) * 2;
+			if (line.historyCount === 0) {
+				line.smoothedPeak = centeredPct;
+			}
+			// Asymmetric EMA: fast attack captures transients, slow release keeps dips visible (Option B)
+			const smoothAlpha = centeredPct >= line.smoothedPeak
+				? Math.min(1, delta * 4)      // fast attack τ ≈ 0.25s
+				: Math.min(1, delta * 0.35);  // slow release τ ≈ 2.86s
+			line.smoothedPeak = MathUtils.lerp(line.smoothedPeak, centeredPct, smoothAlpha);
+			const rawDeviation = centeredPct - line.smoothedPeak;
+			// AGC: asymmetric peak tracker — fast attack on new peaks, slow release builds gain during quiet passages (Option A)
+			const absDeviation = Math.abs(rawDeviation);
+			const agcAlpha = absDeviation > line.agcPeak
+				? Math.min(1, delta * 10)    // fast attack τ ≈ 0.1s
+				: Math.min(1, delta * 0.15); // slow release τ ≈ 6.7s
+			line.agcPeak = Math.max(0.003, MathUtils.lerp(line.agcPeak, absDeviation, agcAlpha));
+			const agcGain = Math.min(20, 0.06 / line.agcPeak);
+			line.historyBuffer[line.historyHead] = rawDeviation * agcGain;
 			line.historyHead = (line.historyHead + 1) % historyCapacity;
 			line.historyCount = Math.min(line.historyCount + 1, historyCapacity);
-			// Map history onto curve: left segment = oldest, right segment = newest
+			// Center-out mapping: center = newest sample, both edges = oldest (symmetric waveform)
 			const samplesInWindow = Math.max(2, Math.min(line.historyCount, Math.round(historyWindow / avgDeltaTime)));
-			// No waveBeatBoost here — it's already baked into each stored sample
 			const displayScale =
 				viewportWidthAtLine *
-				MathUtils.lerp(0.003, 0.038, waveAmplitude / 10);
+				MathUtils.lerp(0.003, 0.038, waveAmplitude / 10) *
+				(1 + Math.min(2.4, waveBeatBoost));
+			const halfSegs = lineCurveSegments / 2;
+			// Power-curve floor lift: quiet signals expand toward the noise floor, peaks unchanged.
+			// waveFloor=0 → exponent 1.0 (no change); waveFloor=10 → exponent 0.2 (strong lift).
+			const floorPow = MathUtils.lerp(1.0, 0.2, waveFloor / 10);
 			for (let seg = 0; seg <= lineCurveSegments; seg++) {
-				const t = seg / lineCurveSegments; // 0 = oldest end, 1 = newest end
-				const rawAge = (1 - t) * (samplesInWindow - 1);
+				const distFromCenter = Math.abs(seg - halfSegs);
+				const t_age = distFromCenter / halfSegs; // 0 = center/newest, 1 = edge/oldest
+				const rawAge = t_age * (samplesInWindow - 1);
 				const ageFloor = Math.floor(rawAge);
 				const ageFrac = rawAge - ageFloor;
 				const idx0 = ((line.historyHead - 1 - ageFloor) % historyCapacity + historyCapacity) % historyCapacity;
 				const idx1 = ((line.historyHead - 2 - ageFloor) % historyCapacity + historyCapacity) % historyCapacity;
 				const historicValue = MathUtils.lerp(line.historyBuffer[idx0], line.historyBuffer[idx1], ageFrac);
-				line.curveOffsets[seg] = historicValue * displayScale;
+				const mag = Math.abs(historicValue);
+				const lifted = mag > 0 ? Math.pow(mag, floorPow) : 0;
+				const target = Math.sign(historicValue) * lifted * displayScale;
+				line.curveOffsets[seg] = MathUtils.lerp(line.curveOffsets[seg], target, Math.min(1, delta * 18));
 			}
-			const baseHalf =
-				viewportWidthAtLine * MathUtils.lerp(0.0012, 0.018, nearWeight) +
-				viewportWidthAtLine * pulse * MathUtils.lerp(0.0006, 0.004, nearWeight);
-			const reactiveSpan = viewportWidthAtLine * MathUtils.lerp(0.05, 0.18, nearWeight);
-			const coreHalfWidth = (baseHalf + reactiveSpan * widthDrive) * activity;
-			const shellHalfWidth =
-				(coreHalfWidth +
-					viewportWidthAtLine *
-						MathUtils.lerp(0.0018, 0.0095, nearWeight) *
-						(ghostCurve + pulse * 0.12)) *
-				activity;
 			const yLift = pulse * MathUtils.lerp(0.01, 0.08, nearWeight);
+			// Fixed half-length — only varies by depth position, not by frequency activity
+			const fixedHalfLength = 0.5 * viewportWidthAtLine * MathUtils.lerp(0.04, 0.18, nearWeight);
 			const shellRadius =
-				(viewportWidthAtLine * MathUtils.lerp(0.00022, 0.00078, nearWeight) +
-					MathUtils.lerp(0.005, 0.012, nearWeight)) *
-				activity;
+				viewportWidthAtLine * MathUtils.lerp(0.00022, 0.00078, nearWeight) +
+				MathUtils.lerp(0.005, 0.012, nearWeight);
 			const coreRadius = shellRadius * 0.05;
 
 			line.group.position.y = line.baseY + yLift;
-			const coreHalfLength = coreHalfWidth * 0.5;
 			updateLineStripGeometry(
 				line.shell.geometry,
-				shellHalfWidth * 0.5,
+				fixedHalfLength,
 				shellRadius,
 				line.curveOffsets
 			);
 			updateLineStripGeometry(
 				line.core.geometry,
-				coreHalfLength * 0.95,
+				fixedHalfLength * 0.95,
 				Math.max(0.001, coreRadius),
 				line.curveOffsets
 			);
 			const tipScale = (MathUtils.lerp(0.42, 0.88, nearWeight) + reactivePct * 0.35) * activity;
+			const coreHalfLength = fixedHalfLength * 0.95;
 			line.tipRight.position.set(
 				coreHalfLength - coreRadius * 0.15,
 				line.curveOffsets[lineCurveSegments],
 				0
 			);
 			line.tipRight.scale.setScalar(Math.max(0.001, tipScale));
-			line.tipLeft.position.set(-coreHalfLength + coreRadius * 0.15, line.curveOffsets[0], 0);
+			line.tipLeft.position.set(-(coreHalfLength - coreRadius * 0.15), line.curveOffsets[0], 0);
 			line.tipLeft.scale.setScalar(Math.max(0.001, tipScale));
 			line.currentHalfLength = Math.max(0, coreHalfLength - coreRadius * 0.15);
 
@@ -982,8 +957,8 @@
 
 		if (store.analyser && dataArray) {
 			store.analyser.getByteFrequencyData(dataArray);
-			const energy = readSceneEnergy(delta);
-			updateGroundLines(energy, now, delta, music?.currentTime ?? 0);
+			readSceneEnergy(delta);
+			updateGroundLines(delta);
 		}
 		updateBeatBoost();
 		emitLineParticles(delta);
@@ -1097,6 +1072,10 @@
 				<label class="particle-control">
 					<span>Wave Amp {waveAmplitude.toFixed(1)}</span>
 					<input type="range" min="0.5" max="10" step="0.1" bind:value={waveAmplitude} />
+				</label>
+				<label class="particle-control">
+					<span>Wave Floor {waveFloor.toFixed(1)}</span>
+					<input type="range" min="0" max="10" step="0.1" bind:value={waveFloor} />
 				</label>
 			</div>
 		{/if}

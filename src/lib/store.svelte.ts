@@ -5,8 +5,6 @@ class LocalStore {
 	audioContext = $state<AudioContext | null>(null);
 	analyser = $state<AnalyserNode | null>(null);
 
-	bars = 128 as const;
-
 	ga = $state<Analytics | null>(null);
 
 	logEvent(name: string, params?: { [key: string]: string | number }) {

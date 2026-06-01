@@ -16,6 +16,8 @@
 	let music = $state<HTMLAudioElement | null>(null);
 	let audioSource = $state<AudioNode | null>(null);
 	let activeVisualizer = $state<'2d' | '3d'>('3d');
+	const freqLow = 20;    // Hz — low frequency cutoff for both visualizers
+	const freqHigh = 18000; // Hz — high frequency cutoff for both visualizers
 	let typedVisualizerCommand = '';
 	let hasConnectedAnalyserOutput = false;
 
@@ -90,9 +92,9 @@
 <svelte:window onkeydown={onVisualizerKeydown} />
 
 {#if activeVisualizer === '3d'}
-	<Visualizer3D {currentTrack} {music} />
+	<Visualizer3D {currentTrack} {music} {freqLow} {freqHigh} />
 {:else}
-	<Visualizer2D {currentTrack} {music} />
+	<Visualizer2D {currentTrack} {music} {freqLow} {freqHigh} />
 {/if}
 <button
 	class="dimension-switch"
