@@ -51,6 +51,7 @@
 		currentColor: Color;
 		activity: number;
 		emissionCarry: number;
+		curveEmissionCarry: number;
 		smoothedPeak: number;
 		agcPeak: number;
 		curveOffsets: Float32Array;
@@ -117,6 +118,7 @@
 	let smoothedMid = 0;
 	let smoothedTransient = 0;
 	let scenePulse = 0;
+	let previousCurveParticleScenePulse = 0;
 	let rotY = 0;
 	let rotX = 0;
 	let rotZ = 0;
@@ -124,7 +126,7 @@
 	let rotVelX = 0;
 	let rotVelZ = 0;
 	let particleMinPerLine = $state(0);
-	let particleMaxPerLine = $state(70);
+	let particleMaxPerLine = $state(120);
 	let showParticleTuning = $state(false);
 	let waveAmplitude = $state(60);
 	let waveFloor = $state(0);
@@ -133,9 +135,11 @@
 	const lineGhostDecayMobile = 0.988;
 	const lineCountDesktop = 60;
 	const lineCountMobile = 26;
-	const maxFloatParticlesDesktop = 18000;
+	const maxFloatParticlesDesktop = 100_000;
 	const maxFloatParticlesMobile = 6000;
 	const particleEmissionRateScale = 0.34;
+	const curveParticleBurstMultiplier = 2;
+	const curveParticlePulseThreshold = 0.6;
 	const cameraOrbitMaxRadians = MathUtils.degToRad(30);
 	const waveBeatBoostSpring = 42;
 	const waveBeatBoostDamping = 9;
@@ -262,6 +266,7 @@
 			Math.max(0, bass - smoothedBass * 0.84) + Math.max(0, mid - smoothedMid * 0.9);
 		smoothedTransient = MathUtils.lerp(smoothedTransient, rawTransient, Math.min(1, delta * 16));
 		scenePulse = Math.max(scenePulse * Math.pow(0.18, delta), smoothedTransient * 3.6);
+		
 	}
 
 	function createLineStripGeometry() {
@@ -405,6 +410,7 @@
 				currentColor: new Color(0xffffff),
 				activity: 0,
 				emissionCarry: 0,
+				curveEmissionCarry: 0,
 				smoothedPeak: 0,
 				agcPeak: 0,
 				curveOffsets: new Float32Array(lineCurveSegments + 1),
@@ -603,7 +609,29 @@
 		return Math.random() < 0.5 ? -1 : 1;
 	}
 
-	function activateFloatParticle(line: LineNode, side: number) {
+	function getRandomCurveSpawn(line: LineNode) {
+		const t = Math.random();
+		const seg = t * lineCurveSegments;
+		const seg0 = Math.floor(seg);
+		const seg1 = Math.min(lineCurveSegments, seg0 + 1);
+		const segFrac = seg - seg0;
+		const x = MathUtils.lerp(-line.currentHalfLength, line.currentHalfLength, t);
+		const y =
+			MathUtils.lerp(line.curveOffsets[seg0], line.curveOffsets[seg1], segFrac) +
+			MathUtils.lerp(0.004, 0.025, Math.random());
+		const side = x < 0 ? -1 : 1;
+
+		return {
+			side: Math.abs(x) < line.currentHalfLength * 0.08 ? endpointSide() : side,
+			position: new Vector3(
+				x + MathUtils.lerp(-0.018, 0.018, Math.random()),
+				y,
+				MathUtils.lerp(-0.018, 0.018, Math.random())
+			)
+		};
+	}
+
+	function activateFloatParticle(line: LineNode, side: number, fromCurve = false) {
 		if (
 			!particlePositions ||
 			!particleColors ||
@@ -617,13 +645,17 @@
 		const particle = floatParticles[nextParticleIndex];
 		const index = nextParticleIndex;
 		nextParticleIndex = (nextParticleIndex + 1) % floatParticles.length;
+		const curveSpawn = fromCurve ? getRandomCurveSpawn(line) : null;
+		if (curveSpawn) side = curveSpawn.side;
 		const tip = side < 0 ? line.tipLeft : line.tipRight;
 		const inwardJitter = Math.pow(Math.random(), 22);
-		const spawnPosition = new Vector3(
-			tip.position.x - side * line.currentHalfLength * 0.014 * inwardJitter,
-			tip.position.y + MathUtils.lerp(0.004, 0.025, Math.random()),
-			tip.position.z + MathUtils.lerp(-0.018, 0.018, Math.random())
-		);
+		const spawnPosition =
+			curveSpawn?.position ??
+			new Vector3(
+				tip.position.x - side * line.currentHalfLength * 0.014 * inwardJitter,
+				tip.position.y + MathUtils.lerp(0.004, 0.025, Math.random()),
+				tip.position.z + MathUtils.lerp(-0.018, 0.018, Math.random())
+			);
 		line.group.localToWorld(spawnPosition);
 		groundGroup?.worldToLocal(spawnPosition);
 		const x = spawnPosition.x;
@@ -639,15 +671,15 @@
 		const activityKick = MathUtils.lerp(1, 1.45, line.activity);
 		const domeAzimuth = MathUtils.lerp(-Math.PI * 0.5, Math.PI * 0.5, Math.random());
 		const domeElevation = MathUtils.lerp(-Math.PI * 0.28, Math.PI * 0.42, Math.random());
-		const kickMagnitude = MathUtils.lerp(0.9, 2.1, Math.random()) * activityKick;
+		const kickMagnitude = MathUtils.lerp(0.9, 2.1, Math.random()) * activityKick * (fromCurve ? .2 : 1);
 		particle.kickX = side * Math.cos(domeAzimuth) * Math.cos(domeElevation) * kickMagnitude;
 		particle.kickY = Math.sin(domeElevation) * kickMagnitude;
 		particle.kickZ = Math.sin(domeAzimuth) * Math.cos(domeElevation) * kickMagnitude;
 		particle.driftX =
 			side * MathUtils.lerp(0.28, 0.72, Math.random()) + MathUtils.lerp(-0.08, 0.08, Math.random());
 		particle.driftZ = MathUtils.lerp(-0.26, 0.12, Math.random());
-		particle.lift = MathUtils.lerp(0.8, 2.8, Math.random()) * MathUtils.lerp(1, 8, line.depthT);
-		particle.size = MathUtils.lerp(isMobile ? 1.8 : 2.2, isMobile ? 4.4 : 5.8, Math.random());
+		particle.lift = MathUtils.lerp(0.8, 2.8, Math.random()) * MathUtils.lerp(1, 8, line.depthT) * (fromCurve ? 4 : 1);
+		particle.size = MathUtils.lerp(isMobile ? 1.8 : 2.2, isMobile ? 4.4 : 5.8, Math.random()) * (fromCurve ? .5 : 1);
 
 		const offset3 = index * 3;
 		particlePositions[offset3] = x;
@@ -675,6 +707,10 @@
 
 		const minRate = Math.max(0, Math.min(particleMinPerLine, particleMaxPerLine));
 		const maxRate = Math.max(minRate, Math.max(particleMinPerLine, particleMaxPerLine));
+		const shouldEmitCurveParticles =
+			scenePulse >= curveParticlePulseThreshold &&
+			previousCurveParticleScenePulse != curveParticlePulseThreshold;
+		console.log('shouldEmitCurveParticles', shouldEmitCurveParticles, scenePulse);
 		for (const line of lines) {
 			if (line.currentHalfLength <= 0.001) continue;
 			const activityBurst = Math.pow(MathUtils.clamp(line.activity, 0, 1), 2.2);
@@ -690,7 +726,23 @@
 			for (let i = 0; i < count; i++) {
 				activateFloatParticle(line, endpointSide());
 			}
+
+			if (!shouldEmitCurveParticles) continue;
+
+			line.curveEmissionCarry +=
+				MathUtils.lerp(minRate, maxRate, activityBurst) *
+				scenePulse *
+				curveParticleBurstMultiplier;
+			const curveCount = Math.min(
+				Math.ceil(12 * curveParticleBurstMultiplier),
+				Math.floor(line.curveEmissionCarry)
+			);
+			line.curveEmissionCarry -= curveCount;
+			for (let i = 0; i < curveCount; i++) {
+				activateFloatParticle(line, endpointSide(), true);
+			}
 		}
+		previousCurveParticleScenePulse = scenePulse;
 	}
 
 	function updateFloatParticles(delta: number) {
