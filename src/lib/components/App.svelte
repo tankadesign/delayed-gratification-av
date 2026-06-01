@@ -16,7 +16,7 @@
 	const totalVisualizers = 3;
 	let music = $state<HTMLAudioElement | null>(null);
 	let audioSource = $state<AudioNode | null>(null);
-	let activeVisualizerIndex = $state(0);
+	let activeVisualizerIndex = $state(1);
 	let isInterfaceHidden = $state(false);
 	let hasConnectedAnalyserOutput = $state(false);
 
