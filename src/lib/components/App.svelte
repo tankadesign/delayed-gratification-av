@@ -1,7 +1,8 @@
 <script lang="ts">
 	import TrackComponent from '$lib/components/Track.svelte';
 	import Visualizer2D from '$lib/components/Visualizer2D.svelte';
-	import Visualizer3D from '$lib/components/Visualizer3D.svelte';
+	import Visualizer3D_01 from '$lib/components/Visualizer3D_01.svelte';
+	import Visualizer3D_02 from '$lib/components/Visualizer3D_02.svelte';
 	import { store } from '$lib/store.svelte';
 	import { tracks } from '$lib/tracks';
 	import type { Track, TrackAudio } from '$lib/types';
@@ -12,9 +13,10 @@
 
 	let { currentTrack = $bindable(null) }: Props = $props();
 
+	const totalVisualizers = 3;
 	let music = $state<HTMLAudioElement | null>(null);
 	let audioSource = $state<AudioNode | null>(null);
-	let activeVisualizer = $state<'2d' | '3d'>('3d');
+	let activeVisualizerIndex = $state(0);
 	let isInterfaceHidden = $state(false);
 	let hasConnectedAnalyserOutput = $state(false);
 
@@ -26,11 +28,16 @@
 			case 'i':
 				isInterfaceHidden = !isInterfaceHidden;
 				break;
+			case '1':
 			case '2':
-				activeVisualizer = '2d';
-				break;
 			case '3':
-				activeVisualizer = '3d';
+				activeVisualizerIndex = Number(event.key) - 1;
+				break;
+			case '+':
+				activeVisualizerIndex = (activeVisualizerIndex + 1) % totalVisualizers;
+				break;
+			case '-':
+				activeVisualizerIndex = (activeVisualizerIndex - 1 + totalVisualizers) % totalVisualizers;
 				break;
 			case 'Escape':
 				isInterfaceHidden = false;
@@ -88,23 +95,25 @@
 	}
 
 	function switchDimension() {
-		activeVisualizer = activeVisualizer === '2d' ? '3d' : '2d';
+		activeVisualizerIndex = activeVisualizerIndex === 0 ? 1 : 0;
 	}
 </script>
 
 <svelte:window onkeydown={onVisualizerKeydown} />
 
-{#if activeVisualizer === '3d'}
-	<Visualizer3D {currentTrack} {music} {freqLow} {freqHigh} />
-{:else}
+{#if activeVisualizerIndex === 0}
+	<Visualizer3D_01 {currentTrack} {music} {freqLow} {freqHigh} />
+{:else if activeVisualizerIndex === 1}
+	<Visualizer3D_02 {currentTrack} {music} {freqLow} {freqHigh} />
+{:else if activeVisualizerIndex === 2}
 	<Visualizer2D {currentTrack} {music} {freqLow} {freqHigh} />
 {/if}
 <button
 	class="dimension-switch"
-	class:is-3d={activeVisualizer === '3d'}
+	class:is-3d={activeVisualizerIndex === 0}
 	class:hidden={isInterfaceHidden}
 	onclick={switchDimension}
-	aria-label={activeVisualizer === '2d' ? 'Switch to 3D visualizer' : 'Switch to 2D visualizer'}
+	aria-label={activeVisualizerIndex === 2 ? 'Switch to 3D visualizer' : 'Switch to 2D visualizer'}
 >
 	<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
 		<path d="M0 0h24v24H0z" fill="none" />
