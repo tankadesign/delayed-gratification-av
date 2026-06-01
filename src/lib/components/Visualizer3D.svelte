@@ -51,7 +51,6 @@
 		currentColor: Color;
 		activity: number;
 		emissionCarry: number;
-		curveEmissionCarry: number;
 		smoothedPeak: number;
 		agcPeak: number;
 		curveOffsets: Float32Array;
@@ -62,8 +61,11 @@
 
 	interface FloatParticle {
 		active: boolean;
+		fromCurve: boolean;
 		life: number;
 		maxLife: number;
+		holdTime: number;
+		fadeDuration: number;
 		startX: number;
 		startY: number;
 		startZ: number;
@@ -138,8 +140,12 @@
 	const maxFloatParticlesDesktop = 100_000;
 	const maxFloatParticlesMobile = 6000;
 	const particleEmissionRateScale = 0.34;
-	const curveParticleBurstMultiplier = 2;
+	const curveParticlesPerLine = 128;
 	const curveParticlePulseThreshold = 0.6;
+	const curveParticleHoldSeconds = 0.45;
+	const curveParticleFadeMinSeconds = 1;
+	const curveParticleFadeMaxSeconds = 3;
+	const curveParticleGravity = 3;
 	const cameraOrbitMaxRadians = MathUtils.degToRad(30);
 	const waveBeatBoostSpring = 42;
 	const waveBeatBoostDamping = 9;
@@ -410,7 +416,6 @@
 				currentColor: new Color(0xffffff),
 				activity: 0,
 				emissionCarry: 0,
-				curveEmissionCarry: 0,
 				smoothedPeak: 0,
 				agcPeak: 0,
 				curveOffsets: new Float32Array(lineCurveSegments + 1),
@@ -457,8 +462,11 @@
 		particleSizes = new Float32Array(count);
 		floatParticles = Array.from({ length: count }, () => ({
 			active: false,
+			fromCurve: false,
 			life: 0,
 			maxLife: 0,
+			holdTime: 0,
+			fadeDuration: 0,
 			startX: 0,
 			startY: 0,
 			startZ: 0,
@@ -609,8 +617,7 @@
 		return Math.random() < 0.5 ? -1 : 1;
 	}
 
-	function getRandomCurveSpawn(line: LineNode) {
-		const t = Math.random();
+	function getCurveSpawn(line: LineNode, t: number) {
 		const seg = t * lineCurveSegments;
 		const seg0 = Math.floor(seg);
 		const seg1 = Math.min(lineCurveSegments, seg0 + 1);
@@ -631,7 +638,7 @@
 		};
 	}
 
-	function activateFloatParticle(line: LineNode, side: number, fromCurve = false) {
+	function activateFloatParticle(line: LineNode, side: number, fromCurve = false, curveT = 0) {
 		if (
 			!particlePositions ||
 			!particleColors ||
@@ -645,7 +652,7 @@
 		const particle = floatParticles[nextParticleIndex];
 		const index = nextParticleIndex;
 		nextParticleIndex = (nextParticleIndex + 1) % floatParticles.length;
-		const curveSpawn = fromCurve ? getRandomCurveSpawn(line) : null;
+		const curveSpawn = fromCurve ? getCurveSpawn(line, curveT) : null;
 		if (curveSpawn) side = curveSpawn.side;
 		const tip = side < 0 ? line.tipLeft : line.tipRight;
 		const inwardJitter = Math.pow(Math.random(), 22);
@@ -663,22 +670,34 @@
 		const z = spawnPosition.z;
 
 		particle.active = true;
+		particle.fromCurve = fromCurve;
 		particle.life = 0;
-		particle.maxLife = MathUtils.lerp(5, 10, Math.random());
+		particle.holdTime = fromCurve ? curveParticleHoldSeconds : 0;
+		particle.fadeDuration = fromCurve
+			? MathUtils.lerp(curveParticleFadeMinSeconds, curveParticleFadeMaxSeconds, Math.random())
+			: 0;
+		particle.maxLife = fromCurve
+			? particle.holdTime + particle.fadeDuration
+			: MathUtils.lerp(5, 10, Math.random());
 		particle.startX = x;
 		particle.startY = y;
 		particle.startZ = z;
 		const activityKick = MathUtils.lerp(1, 1.45, line.activity);
 		const domeAzimuth = MathUtils.lerp(-Math.PI * 0.5, Math.PI * 0.5, Math.random());
 		const domeElevation = MathUtils.lerp(-Math.PI * 0.28, Math.PI * 0.42, Math.random());
-		const kickMagnitude = MathUtils.lerp(0.9, 2.1, Math.random()) * activityKick * (fromCurve ? .2 : 1);
+		const kickMagnitude = fromCurve ? 0 : MathUtils.lerp(0.9, 2.1, Math.random()) * activityKick;
 		particle.kickX = side * Math.cos(domeAzimuth) * Math.cos(domeElevation) * kickMagnitude;
 		particle.kickY = Math.sin(domeElevation) * kickMagnitude;
 		particle.kickZ = Math.sin(domeAzimuth) * Math.cos(domeElevation) * kickMagnitude;
 		particle.driftX =
-			side * MathUtils.lerp(0.28, 0.72, Math.random()) + MathUtils.lerp(-0.08, 0.08, Math.random());
-		particle.driftZ = MathUtils.lerp(-0.26, 0.12, Math.random());
-		particle.lift = MathUtils.lerp(0.8, 2.8, Math.random()) * MathUtils.lerp(1, 8, line.depthT) * (fromCurve ? 4 : 1);
+			fromCurve
+				? 0
+				: side * MathUtils.lerp(0.28, 0.72, Math.random()) +
+					MathUtils.lerp(-0.08, 0.08, Math.random());
+		particle.driftZ = fromCurve ? 0 : MathUtils.lerp(-0.26, 0.12, Math.random());
+		particle.lift = fromCurve
+			? 0
+			: MathUtils.lerp(0.8, 2.8, Math.random()) * MathUtils.lerp(1, 8, line.depthT);
 		particle.size = MathUtils.lerp(isMobile ? 1.8 : 2.2, isMobile ? 4.4 : 5.8, Math.random()) * (fromCurve ? .5 : 1);
 
 		const offset3 = index * 3;
@@ -709,8 +728,7 @@
 		const maxRate = Math.max(minRate, Math.max(particleMinPerLine, particleMaxPerLine));
 		const shouldEmitCurveParticles =
 			scenePulse >= curveParticlePulseThreshold &&
-			previousCurveParticleScenePulse != curveParticlePulseThreshold;
-		console.log('shouldEmitCurveParticles', shouldEmitCurveParticles, scenePulse);
+			previousCurveParticleScenePulse < curveParticlePulseThreshold;
 		for (const line of lines) {
 			if (line.currentHalfLength <= 0.001) continue;
 			const activityBurst = Math.pow(MathUtils.clamp(line.activity, 0, 1), 2.2);
@@ -729,17 +747,10 @@
 
 			if (!shouldEmitCurveParticles) continue;
 
-			line.curveEmissionCarry +=
-				MathUtils.lerp(minRate, maxRate, activityBurst) *
-				scenePulse *
-				curveParticleBurstMultiplier;
-			const curveCount = Math.min(
-				Math.ceil(12 * curveParticleBurstMultiplier),
-				Math.floor(line.curveEmissionCarry)
-			);
-			line.curveEmissionCarry -= curveCount;
+			const curveCount = curveParticlesPerLine;
 			for (let i = 0; i < curveCount; i++) {
-				activateFloatParticle(line, endpointSide(), true);
+				const curveT = curveCount <= 1 ? 0.5 : i / (curveCount - 1);
+				activateFloatParticle(line, endpointSide(), true, curveT);
 			}
 		}
 		previousCurveParticleScenePulse = scenePulse;
@@ -773,16 +784,29 @@
 			const driftEase = 1 - Math.pow(1 - lifeT, 3);
 			const kickEase = 1 - Math.exp(-lifeT * 16);
 			const kickDampen = Math.exp(-lifeT * 12);
-			const fadeOut = lifeT < 0.72 ? 1 : 1 - (lifeT - 0.72) / 0.28;
+			const fadeOut = particle.fromCurve
+				? particle.life <= particle.holdTime
+					? 1
+					: 1 - (particle.life - particle.holdTime) / particle.fadeDuration
+				: lifeT < 0.72 ? 1 : 1 - (lifeT - 0.72) / 0.28;
 
-			particlePositions[offset3] =
-				particle.startX + particle.kickX * kickEase * kickDampen + particle.driftX * driftEase;
-			particlePositions[offset3 + 1] =
-				particle.startY + particle.kickY * kickEase * kickDampen + particle.lift * cubicLift;
-			particlePositions[offset3 + 2] =
-				particle.startZ + particle.kickZ * kickEase * kickDampen + particle.driftZ * driftEase;
+			if (particle.fromCurve) {
+				particlePositions[offset3] = particle.startX;
+				particlePositions[offset3 + 1] =
+					particle.startY - 0.5 * curveParticleGravity * particle.life * particle.life;
+				particlePositions[offset3 + 2] = particle.startZ;
+			} else {
+				particlePositions[offset3] =
+					particle.startX + particle.kickX * kickEase * kickDampen + particle.driftX * driftEase;
+				particlePositions[offset3 + 1] =
+					particle.startY + particle.kickY * kickEase * kickDampen + particle.lift * cubicLift;
+				particlePositions[offset3 + 2] =
+					particle.startZ + particle.kickZ * kickEase * kickDampen + particle.driftZ * driftEase;
+			}
 			particleAlphas[i] = Math.max(0, fadeOut) * 0.38;
-			particleSizes[i] = particle.size * MathUtils.lerp(0.75, 1.18, lifeT);
+			particleSizes[i] = particle.fromCurve
+				? particle.size
+				: particle.size * MathUtils.lerp(0.75, 1.18, lifeT);
 		}
 
 		particleGeometry.attributes.position.needsUpdate = true;
