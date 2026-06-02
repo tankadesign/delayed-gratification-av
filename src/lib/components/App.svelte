@@ -187,7 +187,7 @@
 				<span
 					><strong>⬅</strong>
 					<strong style="display: inline-block;transform: scaleX(-1);">⬅</strong></span
-				> <button>Cycle visualizer</button>
+				> <button onclick={() => skipVisualizer(1)}>Cycle visualizer</button>
 			</li>
 			<li><span><strong>c</strong></span> Toggle controls (if available)</li>
 			<li><span><strong>Escape</strong></span> Show interface</li>
@@ -199,21 +199,8 @@
 		class:is-on={isHelpActive}
 		class:hidden={isInterfaceHidden}
 		onclick={toggleHelp}
-		aria-label="Show help"
+		aria-label="Show help">?</button
 	>
-		<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 512 512">
-			<path d="M0 0h512v512H0z" fill="none" />
-			<path
-				fill="none"
-				stroke="currentColor"
-				stroke-linecap="round"
-				stroke-miterlimit="10"
-				stroke-width="40"
-				d="M160 164s1.44-33 33.54-59.46C212.6 88.83 235.49 84.28 256 84c18.73-.23 35.47 2.94 45.48 7.82C318.59 100.2 352 120.6 352 164c0 45.67-29.18 66.37-62.35 89.18S248 298.36 248 324"
-			/>
-			<circle cx="248" cy="399.99" r="32" fill="currentColor" />
-		</svg>
-	</button>
 {/if}
 <div class="wrap" class:hidden={isInterfaceHidden}>
 	<div class="text">
@@ -265,12 +252,12 @@
 		font-size: 4rem;
 		margin: 0;
 		line-height: 1;
-		font-family: 'Zen Dots';
+		font-family: var(--zendots);
 		text-align: center;
 	}
 	h2 {
 		font-size: 1.5rem;
-		font-family: 'Zen Dots';
+		font-family: var(--zendots);
 		width: 320px;
 		margin: 0 auto;
 		font-weight: 300;
@@ -294,7 +281,7 @@
 		padding: 6px;
 		color: white;
 		font-size: 12px;
-		font-family: monospace;
+		font-family: var(--monospace);
 		z-index: 3;
 		transition: opacity 0.5s ease 1s;
 	}
@@ -316,32 +303,6 @@
 			transform: translate(-5px, -50%);
 		}
 	}
-	.help-toggle {
-		position: fixed;
-		top: 10px;
-		right: 10px;
-		z-index: 2;
-		background: black;
-		padding: 4px;
-		outline: none;
-		color: white;
-		border: 1px solid rgb(255 255 255 / 0.2);
-		border-radius: 100px;
-		display: flex;
-		--highlight: rgb(255, 135, 255);
-	}
-	.help-toggle:hover,
-	.help-toggle:focus-visible {
-		border-color: white;
-	}
-	.help-toggle.is-on {
-		color: var(--highlight);
-		border-color: color-mix(in srgb, var(--highlight), transparent 60%);
-	}
-	.help-toggle.is-on:hover,
-	.help-toggle.is-on:focus-visible {
-		border-color: var(--highlight);
-	}
 
 	.help-overlay {
 		position: fixed;
@@ -350,7 +311,7 @@
 		background: rgba(0, 0, 0, 0.8);
 		color: white;
 		padding: 20px;
-		font-family: monospace;
+		font-family: var(--monospace);
 		font-size: 12px;
 		z-index: 5;
 	}
@@ -364,7 +325,7 @@
 		margin: 0;
 		display: flex;
 		flex-direction: column;
-		gap: 4px;
+		gap: 8px;
 	}
 	.help-overlay li {
 		display: flex;
@@ -373,7 +334,6 @@
 	.help-overlay span {
 		display: inline-flex;
 		gap: 4px;
-		font-size: 10px;
 	}
 	.help-overlay button {
 		border: 0;
@@ -389,6 +349,7 @@
 		font-weight: normal;
 		cursor: pointer;
 	}
+	.help-toggle,
 	.help-overlay strong {
 		display: inline-block;
 		border: 1px solid rgba(255, 255, 255, 0.3);
@@ -396,5 +357,36 @@
 		border-radius: 2px;
 		min-width: 18px;
 		text-align: center;
+		color: white;
+	}
+
+	.help-toggle {
+		position: fixed;
+		top: 10px;
+		right: 10px;
+		z-index: 2;
+		background: black;
+		text-decoration: none;
+		outline: none;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		font-size: 12px;
+		width: 22px;
+		font-family: var(--monospace);
+		font-weight: bold;
+		--highlight: rgb(255, 135, 255);
+	}
+	.help-toggle:hover,
+	.help-toggle:focus-visible {
+		border-color: white;
+	}
+	.help-toggle.is-on {
+		color: var(--highlight);
+		border-color: color-mix(in srgb, var(--highlight), transparent 60%);
+	}
+	.help-toggle.is-on:hover,
+	.help-toggle.is-on:focus-visible {
+		border-color: var(--highlight);
 	}
 </style>

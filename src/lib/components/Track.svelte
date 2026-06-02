@@ -195,7 +195,7 @@
 <style>
 	.track {
 		color: white;
-		font-family: 'Share Tech Mono', monospace;
+		font-family: var(--monospace);
 		box-shadow: inset 0 0 1px 1px rgba(255, 255, 255, 0.15);
 		border-radius: 180px;
 		padding: 0 16px 0 4px;
@@ -293,7 +293,7 @@
 		display: none;
 	}
 	.time {
-		font-family: 'Share Tech Mono', monospace;
+		font-family: var(--monospace);
 		line-height: 1;
 		font-size: 12px;
 		display: flex;

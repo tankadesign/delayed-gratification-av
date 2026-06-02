@@ -849,6 +849,6 @@
 		padding: 4px 5px;
 		font-size: 12px;
 		font-weight: bold;
-		font-family: 'Courier New', Courier, monospace;
+		font-family: var(--monospace);
 	}
 </style>
