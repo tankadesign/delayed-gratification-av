@@ -6,7 +6,7 @@
 	import { store } from '$lib/store.svelte';
 	import { tracks } from '$lib/tracks';
 	import type { Track, TrackAudio } from '$lib/types';
-	import { onMount, untrack } from 'svelte';
+	import { untrack } from 'svelte';
 	import { fade } from 'svelte/transition';
 
 	interface Props {
@@ -25,6 +25,7 @@
 	let isHelpActive = $state(false);
 	let hideVisualizerName = $state(true);
 	let hideVisualizerNameTimeout = $state<number>();
+	let didChooseVisualizer = $state(false);
 
 	$effect(() => {
 		if (activeVisualizerIndex > -1) {
@@ -57,21 +58,24 @@
 
 		switch (event.key) {
 			case 'i':
-				isInterfaceHidden = !isInterfaceHidden;
+				toggleInterface();
 				break;
 			case '1':
 			case '2':
 			case '3':
 				activeVisualizerIndex = Number(event.key) - 1;
+				didChooseVisualizer = true;
 				break;
 			case 'ArrowRight':
-				activeVisualizerIndex = (activeVisualizerIndex + 1) % totalVisualizers;
+				skipVisualizer(1);
+				didChooseVisualizer = true;
 				break;
 			case 'ArrowLeft':
-				activeVisualizerIndex = (activeVisualizerIndex - 1 + totalVisualizers) % totalVisualizers;
+				skipVisualizer(-1);
+				didChooseVisualizer = true;
 				break;
 			case 'h':
-				isHelpActive = !isHelpActive;
+				toggleHelp();
 				break;
 			case 'c':
 				isShowingControls = !isShowingControls;
@@ -128,16 +132,25 @@
 		const track = document.querySelector('#track-' + tracks[next].id + ' button');
 		if (track) {
 			(track as HTMLButtonElement).click();
+			console.log('Skipped to next track:', tracks[next].name);
+			if (!didChooseVisualizer) {
+				skipVisualizer(1);
+			}
 		}
+	}
+
+	function skipVisualizer(delta: number) {
+		activeVisualizerIndex = (activeVisualizerIndex + delta + totalVisualizers) % totalVisualizers;
+		console.log('Switched to visualizer index', activeVisualizerIndex);
 	}
 
 	function toggleHelp() {
 		isHelpActive = !isHelpActive;
 	}
 
-	onMount(() => {
-		activeVisualizerIndex = Math.floor(Math.random() * totalVisualizers);
-	});
+	function toggleInterface() {
+		isInterfaceHidden = !isInterfaceHidden;
+	}
 </script>
 
 <svelte:window onkeydown={onVisualizerKeydown} />
@@ -163,16 +176,18 @@
 	<div class="help-overlay">
 		<p>Keybindings</p>
 		<ul>
-			<li><span><strong>h</strong></span> Toggle help</li>
-			<li><span><strong>i</strong></span> Toggle interface</li>
+			<li><span><strong>h</strong></span> <button onclick={toggleHelp}>Toggle help</button></li>
 			<li>
-				<span><strong>1</strong>, <strong>2</strong>, <strong>3</strong></span> Choose visualizer
+				<span><strong>i</strong></span> <button onclick={toggleInterface}>Toggle interface</button>
+			</li>
+			<li>
+				<span><strong>1</strong><strong>2</strong><strong>3</strong></span> Choose visualizer
 			</li>
 			<li>
 				<span
 					><strong>⬅</strong>
 					<strong style="display: inline-block;transform: scaleX(-1);">⬅</strong></span
-				> Cycle visualizer
+				> <button>Cycle visualizer</button>
 			</li>
 			<li><span><strong>c</strong></span> Toggle controls (if available)</li>
 			<li><span><strong>Escape</strong></span> Show interface</li>
@@ -341,7 +356,7 @@
 	}
 	.help-overlay p {
 		margin: 0 0 12px;
-		text-decoration: underline;
+		font-weight: bold;
 	}
 	.help-overlay ul {
 		list-style-type: none;
@@ -349,10 +364,37 @@
 		margin: 0;
 		display: flex;
 		flex-direction: column;
-		gap: 2px;
+		gap: 4px;
 	}
 	.help-overlay li {
 		display: flex;
 		gap: 12px;
+	}
+	.help-overlay span {
+		display: inline-flex;
+		gap: 4px;
+		font-size: 10px;
+	}
+	.help-overlay button {
+		border: 0;
+		color: white;
+		background: none;
+		margin: 0;
+		padding: 0;
+		outline: none;
+		text-decoration: underline;
+		text-underline-offset: 4px;
+		text-decoration-thickness: 0.5px;
+		text-decoration-color: rgba(255, 255, 255, 0.5);
+		font-weight: normal;
+		cursor: pointer;
+	}
+	.help-overlay strong {
+		display: inline-block;
+		border: 1px solid rgba(255, 255, 255, 0.3);
+		padding: 2px 4px;
+		border-radius: 2px;
+		min-width: 18px;
+		text-align: center;
 	}
 </style>
