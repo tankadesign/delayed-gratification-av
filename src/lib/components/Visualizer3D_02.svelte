@@ -847,6 +847,10 @@
 		width: 100%;
 	}
 
+	.tunnel-control input[type='number'] {
+		color: white;
+	}
+
 	.tunnel-controls-scroll {
 		overflow: auto;
 	}
