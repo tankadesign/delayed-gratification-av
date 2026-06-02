@@ -713,7 +713,7 @@
 	<div class="tunnel-controls">
 		<div class="tunnel-controls-panel">
 			<div class="tunnel-controls-header">
-				<strong>Tunnel Shader</strong>
+				<strong>Shader Settings</strong>
 				<div class="tunnel-controls-actions">
 					{#if dev}
 						<button type="button" onclick={copyTunnelConfig}>
@@ -780,7 +780,7 @@
 	.tunnel-controls {
 		position: fixed;
 		top: 12px;
-		right: 12px;
+		left: 12px;
 		z-index: 4;
 		width: min(360px, calc(100vw - 24px));
 		color: white;
@@ -789,20 +789,19 @@
 	}
 
 	.tunnel-controls button {
-		border: 1px solid rgba(255, 255, 255, 0.24);
-		background: rgba(4, 5, 16, 0.78);
+		border: 1px solid rgba(255, 255, 255, 0.18);
+		background: transparent;
 		color: white;
-		padding: 7px 10px;
+		padding: 4px 10px;
 		cursor: pointer;
 	}
 
 	.tunnel-controls-panel {
-		margin-top: 8px;
-		max-height: min(72vh, 760px);
+		max-height: min(72vh, 420px);
 		border: 1px solid rgba(255, 255, 255, 0.18);
 		border-radius: 8px;
-		background: rgba(3, 4, 14, 0.34);
-		backdrop-filter: blur(4px);
+		background: rgba(0, 0, 0, 0.75);
+		backdrop-filter: blur(24px);
 		padding: 10px;
 		display: grid;
 		grid-template-rows: auto 1fr;
@@ -832,16 +831,9 @@
 		gap: 4px;
 	}
 
-	.tunnel-control span {
-		color: rgba(255, 255, 255, 0.78);
-	}
-
 	.tunnel-readout {
-		padding: 5px 7px;
-		border-radius: 5px;
-		background: rgba(255, 255, 255, 0.07);
-		color: rgba(255, 255, 255, 0.76);
-		font-variant-numeric: tabular-nums;
+		padding: 5px 0 20px;
+		color: #ff00bf;
 	}
 
 	.tunnel-control-row {
@@ -863,9 +855,8 @@
 		width: 100%;
 		box-sizing: border-box;
 		border: 1px solid rgba(255, 255, 255, 0.18);
-		border-radius: 4px;
+		border-radius: 0;
 		background: rgba(255, 255, 255, 0.08);
-		color: white;
 		padding: 4px 5px;
 		font-size: 12px;
 		font-weight: bold;

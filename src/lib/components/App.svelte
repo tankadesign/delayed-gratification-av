@@ -6,6 +6,8 @@
 	import { store } from '$lib/store.svelte';
 	import { tracks } from '$lib/tracks';
 	import type { Track, TrackAudio } from '$lib/types';
+	import { untrack } from 'svelte';
+	import { fade } from 'svelte/transition';
 
 	interface Props {
 		currentTrack?: Track | null;
@@ -16,10 +18,25 @@
 	const totalVisualizers = 3;
 	let music = $state<HTMLAudioElement | null>(null);
 	let audioSource = $state<AudioNode | null>(null);
-	let activeVisualizerIndex = $state(1);
+	let activeVisualizerIndex = $state(0);
 	let isInterfaceHidden = $state(false);
 	let hasConnectedAnalyserOutput = $state(false);
 	let isShowingControls = $state(false);
+	let isHelpActive = $state(false);
+	let hideVisualizerName = $state(true);
+	let hideVisualizerNameTimeout = $state<number>();
+
+	$effect(() => {
+		if (activeVisualizerIndex > -1) {
+			untrack(() => {
+				hideVisualizerName = false;
+				clearTimeout(hideVisualizerNameTimeout);
+				hideVisualizerNameTimeout = window.setTimeout(() => {
+					hideVisualizerName = true;
+				}, 1000);
+			});
+		}
+	});
 
 	const freqLow = 20; // Hz — low frequency cutoff for both visualizers
 	const freqHigh = 18000; // Hz — high frequency cutoff for both visualizers
@@ -47,11 +64,14 @@
 			case '3':
 				activeVisualizerIndex = Number(event.key) - 1;
 				break;
-			case '+':
+			case 'ArrowRight':
 				activeVisualizerIndex = (activeVisualizerIndex + 1) % totalVisualizers;
 				break;
-			case '-':
+			case 'ArrowLeft':
 				activeVisualizerIndex = (activeVisualizerIndex - 1 + totalVisualizers) % totalVisualizers;
+				break;
+			case 'h':
+				isHelpActive = !isHelpActive;
 				break;
 			case 'c':
 				isShowingControls = !isShowingControls;
@@ -111,37 +131,71 @@
 		}
 	}
 
-	function switchDimension() {
-		activeVisualizerIndex = activeVisualizerIndex === 0 ? 1 : 0;
+	function toggleHelp() {
+		isHelpActive = !isHelpActive;
 	}
 </script>
 
 <svelte:window onkeydown={onVisualizerKeydown} />
 
-{#if activeVisualizerIndex === 0}
+{#if activeVisualizerIndex === 1}
+	{#if !hideVisualizerName}
+		<h3 class="name" out:fade>Waves</h3>
+	{/if}
 	<Visualizer3D_01 {currentTrack} {music} {freqLow} {freqHigh} />
-{:else if activeVisualizerIndex === 1}
+{:else if activeVisualizerIndex === 0}
+	{#if !hideVisualizerName}
+		<h3 class="name" out:fade>Tunnel</h3>
+	{/if}
 	<Visualizer3D_02 {currentTrack} {music} {freqLow} {freqHigh} {isShowingControls} />
 {:else if activeVisualizerIndex === 2}
+	{#if !hideVisualizerName}
+		<h3 class="name" out:fade>Dots and lines</h3>
+	{/if}
 	<Visualizer2D {currentTrack} {music} {freqLow} {freqHigh} />
 {/if}
-<button
-	class="dimension-switch"
-	class:is-3d={activeVisualizerIndex === 0}
-	class:hidden={isInterfaceHidden}
-	onclick={switchDimension}
-	aria-label={activeVisualizerIndex === 2 ? 'Switch to 3D visualizer' : 'Switch to 2D visualizer'}
->
-	<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
-		<path d="M0 0h24v24H0z" fill="none" />
-		<path
-			fill="none"
-			stroke="currentColor"
-			stroke-linejoin="round"
-			d="M12 21v-8m0 8l-6.162-4.402c-.411-.293-.616-.44-.727-.655S5 15.475 5 14.971V8m7 13l6.163-4.402c.41-.293.615-.44.726-.655s.111-.468.111-.972V8m-7 5L5 8m7 5l7-5M5 8l5.838-4.17c.56-.4.842-.601 1.162-.601s.601.2 1.162.601L19 8"
-		/>
-	</svg>
-</button>
+
+{#if isHelpActive}
+	<div class="help-overlay">
+		<p>Keybindings</p>
+		<ul>
+			<li><span><strong>h</strong></span> Toggle help</li>
+			<li><span><strong>i</strong></span> Toggle interface</li>
+			<li>
+				<span><strong>1</strong>, <strong>2</strong>, <strong>3</strong></span> Choose visualizer
+			</li>
+			<li>
+				<span
+					><strong>⬅</strong>
+					<strong style="display: inline-block;transform: scaleX(-1);">⬅</strong></span
+				> Cycle visualizer
+			</li>
+			<li><span><strong>c</strong></span> Toggle controls (if available)</li>
+			<li><span><strong>Escape</strong></span> Show interface</li>
+		</ul>
+	</div>
+{:else}
+	<button
+		class="help-toggle"
+		class:is-on={isHelpActive}
+		class:hidden={isInterfaceHidden}
+		onclick={toggleHelp}
+		aria-label="Show help"
+	>
+		<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 512 512">
+			<path d="M0 0h512v512H0z" fill="none" />
+			<path
+				fill="none"
+				stroke="currentColor"
+				stroke-linecap="round"
+				stroke-miterlimit="10"
+				stroke-width="40"
+				d="M160 164s1.44-33 33.54-59.46C212.6 88.83 235.49 84.28 256 84c18.73-.23 35.47 2.94 45.48 7.82C318.59 100.2 352 120.6 352 164c0 45.67-29.18 66.37-62.35 89.18S248 298.36 248 324"
+			/>
+			<circle cx="248" cy="399.99" r="32" fill="currentColor" />
+		</svg>
+	</button>
+{/if}
 <div class="wrap" class:hidden={isInterfaceHidden}>
 	<div class="text">
 		<h1>j.Falcon</h1>
@@ -171,7 +225,7 @@
 		z-index: 1;
 	}
 	.wrap,
-	.dimension-switch {
+	.help-toggle {
 		transition: opacity 0.5s ease;
 	}
 	.hidden {
@@ -211,6 +265,20 @@
 	.text {
 		color: white;
 	}
+	.name {
+		position: fixed;
+		left: 50%;
+		top: 20px;
+		transform: translate(-50%, 0);
+		width: fit-content;
+		background: black;
+		padding: 6px;
+		color: white;
+		font-size: 12px;
+		font-family: monospace;
+		z-index: 3;
+		transition: opacity 0.5s ease 1s;
+	}
 	@media (min-width: 560px) {
 		h1 {
 			font-size: 7rem;
@@ -229,29 +297,58 @@
 			transform: translate(-5px, -50%);
 		}
 	}
-	.dimension-switch {
+	.help-toggle {
 		position: fixed;
 		top: 10px;
 		right: 10px;
 		z-index: 2;
 		background: black;
-		padding: 8px;
-		font-size: 12px;
+		padding: 4px;
 		outline: none;
 		color: white;
 		border: 1px solid rgb(255 255 255 / 0.2);
-		--highlight: #87bdff;
+		border-radius: 100px;
+		display: flex;
+		--highlight: rgb(255, 135, 255);
 	}
-	.dimension-switch:hover,
-	.dimension-switch:focus-visible {
+	.help-toggle:hover,
+	.help-toggle:focus-visible {
 		border-color: white;
 	}
-	.dimension-switch.is-3d {
+	.help-toggle.is-on {
 		color: var(--highlight);
 		border-color: color-mix(in srgb, var(--highlight), transparent 60%);
 	}
-	.dimension-switch.is-3d:hover,
-	.dimension-switch.is-3d:focus-visible {
+	.help-toggle.is-on:hover,
+	.help-toggle.is-on:focus-visible {
 		border-color: var(--highlight);
+	}
+
+	.help-overlay {
+		position: fixed;
+		top: 12px;
+		right: 12px;
+		background: rgba(0, 0, 0, 0.8);
+		color: white;
+		padding: 20px;
+		font-family: monospace;
+		font-size: 12px;
+		z-index: 5;
+	}
+	.help-overlay p {
+		margin: 0 0 12px;
+		text-decoration: underline;
+	}
+	.help-overlay ul {
+		list-style-type: none;
+		padding: 0;
+		margin: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+	.help-overlay li {
+		display: flex;
+		gap: 12px;
 	}
 </style>
