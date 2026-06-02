@@ -67,7 +67,7 @@
 	const initialTunnelConfig = {
 		slices: 180,
 		segments: 290,
-		emitIntervalSeconds: 0.105,
+		emitIntervalSeconds: 0.45,
 		lifetimeSeconds: 10.8,
 		depth: 288,
 		nearZ: -13.5,
@@ -83,11 +83,9 @@
 		curveEndFade: 0.08,
 		morphStrength: 80,
 		tunnelTwist: 8.6,
-		gapModAmount: 0.68,
-		gapModNoiseSpeedMin: 0.01,
-		gapModNoiseSpeedMax: 3.93,
-		gapModNoiseContrast: 4.85,
-		gapModNoiseBias: 0.59,
+		gapModAmount: 0.4,
+		gapModNoiseSpeed: 3.26,
+		gapModNoiseContrast: 2.55,
 		ghostEnabled: 1,
 		ghostOpacity: 0.23,
 		ghostScale: 0.92,
@@ -258,31 +256,20 @@
 		return MathUtils.lerp(noiseHash(i), noiseHash(i + 1), u);
 	}
 
-	function contrastNoise(value: number, contrast: number, bias: number) {
+	function contrastNoise(value: number, contrast: number) {
 		const centered = (value - 0.5) * Math.max(0, contrast);
-		return MathUtils.clamp(centered + 0.5 + bias, 0, 1);
+		return MathUtils.clamp(centered + 0.5, 0, 1);
 	}
 
 	function updateEmitInterval(delta: number) {
-		const speedNoise = contrastNoise(
-			valueNoise1D(timeSeconds * 0.19 + 17.0),
-			tunnelConfig.gapModNoiseContrast,
-			tunnelConfig.gapModNoiseBias
+		gapNoiseTime += delta * tunnelConfig.gapModNoiseSpeed;
+		const gapNoise = contrastNoise(valueNoise1D(gapNoiseTime), tunnelConfig.gapModNoiseContrast);
+		const centeredNoise = gapNoise * 2 - 1;
+		const modulationWidth = Math.max(0, tunnelConfig.gapModAmount);
+		currentEmitInterval = Math.max(
+			0.005,
+			tunnelConfig.emitIntervalSeconds + centeredNoise * modulationWidth
 		);
-		const speed = MathUtils.lerp(
-			tunnelConfig.gapModNoiseSpeedMin,
-			tunnelConfig.gapModNoiseSpeedMax,
-			speedNoise
-		);
-		gapNoiseTime += delta * speed;
-		const gapNoise = contrastNoise(
-			valueNoise1D(gapNoiseTime),
-			tunnelConfig.gapModNoiseContrast,
-			tunnelConfig.gapModNoiseBias
-		);
-		const amount = MathUtils.clamp(tunnelConfig.gapModAmount, 0, 1);
-		const factor = MathUtils.lerp(1 - amount * 0.82, 1 + amount * 2.9, gapNoise);
-		currentEmitInterval = Math.max(0.005, tunnelConfig.emitIntervalSeconds * factor);
 	}
 
 	function getBendOffset(age: number) {
@@ -728,11 +715,9 @@
 				{@render rangeControl('Segments', 'segments', 24, 360, 1, true)}
 				{@render rangeControl('Emit gap', 'emitIntervalSeconds', 0.01, 0.25, 0.005)}
 				<div class="tunnel-readout">Animated gap {currentEmitInterval.toFixed(3)}s</div>
-				{@render rangeControl('Gap modulation', 'gapModAmount', 0, 1, 0.01)}
-				{@render rangeControl('Gap speed min', 'gapModNoiseSpeedMin', 0.01, 2, 0.01)}
-				{@render rangeControl('Gap speed max', 'gapModNoiseSpeedMax', 0.01, 5, 0.01)}
+				{@render rangeControl('Gap modulation width', 'gapModAmount', 0, 0.5, 0.005)}
+				{@render rangeControl('Gap modulation speed', 'gapModNoiseSpeed', 0, 5, 0.01)}
 				{@render rangeControl('Gap noise contrast', 'gapModNoiseContrast', 0.1, 8, 0.05)}
-				{@render rangeControl('Gap noise bias', 'gapModNoiseBias', -1, 1, 0.01)}
 				{@render rangeControl('Lifetime', 'lifetimeSeconds', 0.8, 12, 0.1)}
 				{@render rangeControl('Emission curve', 'emissionCurvePower', 0.05, 5, 0.05)}
 				{@render rangeControl('Depth', 'depth', 20, 360, 1)}
