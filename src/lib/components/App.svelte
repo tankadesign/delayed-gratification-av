@@ -338,6 +338,7 @@
 	.help-overlay li {
 		display: flex;
 		gap: 12px;
+		align-items: center;
 	}
 	.help-overlay span {
 		display: inline-flex;
