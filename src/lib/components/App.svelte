@@ -6,7 +6,7 @@
 	import { store } from '$lib/store.svelte';
 	import { tracks } from '$lib/tracks';
 	import type { Track, TrackAudio } from '$lib/types';
-	import { untrack } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { fade } from 'svelte/transition';
 
 	interface Props {
@@ -134,6 +134,10 @@
 	function toggleHelp() {
 		isHelpActive = !isHelpActive;
 	}
+
+	onMount(() => {
+		activeVisualizerIndex = Math.floor(Math.random() * totalVisualizers);
+	});
 </script>
 
 <svelte:window onkeydown={onVisualizerKeydown} />
