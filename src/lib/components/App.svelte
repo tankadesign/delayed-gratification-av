@@ -1,8 +1,8 @@
 <script lang="ts">
 	import TrackComponent from '$lib/components/Track.svelte';
-	import Visualizer2D from '$lib/components/Visualizer2D.svelte';
-	import Visualizer3D_01 from '$lib/components/Visualizer3D_01.svelte';
-	import Visualizer3D_02 from '$lib/components/Visualizer3D_02.svelte';
+	import VisualizerDotsAndLines from '$lib/components/visualizers/DotsAndLines.svelte';
+	import VisualizerWaves from '$lib/components/visualizers/Waves.svelte';
+	import VisualizerTunnel from '$lib/components/visualizers/Tunnel.svelte';
 	import { store } from '$lib/store.svelte';
 	import { tracks } from '$lib/tracks';
 	import type { Track, TrackAudio } from '$lib/types';
@@ -41,6 +41,7 @@
 
 	const freqLow = 20; // Hz — low frequency cutoff for both visualizers
 	const freqHigh = 18000; // Hz — high frequency cutoff for both visualizers
+	const tunnelConfig = {};
 
 	function isEditableTarget(target: EventTarget | null) {
 		if (!(target instanceof HTMLElement)) return false;
@@ -159,17 +160,24 @@
 	{#if !hideVisualizerName}
 		<h3 class="name" out:fade>Waves</h3>
 	{/if}
-	<Visualizer3D_01 {currentTrack} {music} {freqLow} {freqHigh} />
+	<VisualizerWaves {currentTrack} {music} {freqLow} {freqHigh} />
 {:else if activeVisualizerIndex === 0}
 	{#if !hideVisualizerName}
 		<h3 class="name" out:fade>Tunnel</h3>
 	{/if}
-	<Visualizer3D_02 {currentTrack} {music} {freqLow} {freqHigh} {isShowingControls} />
+	<VisualizerTunnel
+		{currentTrack}
+		{music}
+		{freqLow}
+		{freqHigh}
+		{isShowingControls}
+		config={tunnelConfig}
+	/>
 {:else if activeVisualizerIndex === 2}
 	{#if !hideVisualizerName}
 		<h3 class="name" out:fade>Dots and lines</h3>
 	{/if}
-	<Visualizer2D {currentTrack} {music} {freqLow} {freqHigh} />
+	<VisualizerDotsAndLines {currentTrack} {music} {freqLow} {freqHigh} />
 {/if}
 
 {#if isHelpActive}

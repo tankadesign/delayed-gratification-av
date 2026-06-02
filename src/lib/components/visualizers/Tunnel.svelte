@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { dev } from '$app/environment';
 	import { store } from '$lib/store.svelte';
-	import type { Track } from '$lib/types';
+	import type { Track, TunnelConfig } from '$lib/types';
 	import { onDestroy, onMount } from 'svelte';
 	import {
 		AdditiveBlending,
@@ -25,6 +25,7 @@
 		freqLow?: number;
 		freqHigh?: number;
 		isShowingControls?: boolean;
+		config?: PartialTunnelConfig;
 	}
 
 	interface TunnelSlice {
@@ -40,12 +41,19 @@
 		active: boolean;
 	}
 
+	type PartialTunnelConfig = {
+		[K in keyof TunnelConfig]?: TunnelConfig[K] extends Record<string, number>
+			? Partial<TunnelConfig[K]>
+			: TunnelConfig[K];
+	};
+
 	let {
 		currentTrack = null,
 		music = null,
 		freqLow = 35,
 		freqHigh = 14000,
-		isShowingControls = false
+		isShowingControls = false,
+		config = {}
 	}: Props = $props();
 
 	let canvasEl = $state<HTMLCanvasElement>();
@@ -68,7 +76,7 @@
 	let resizeHandler: (() => void) | null = null;
 	let didCopyTunnelConfig = $state(false);
 
-	const initialTunnelConfig = {
+	const initialTunnelConfig: TunnelConfig = {
 		slices: 180,
 		segments: 290,
 		emitIntervalSeconds: 0.45,
@@ -76,44 +84,66 @@
 		depth: 288,
 		nearZ: -13.5,
 		cameraZ: 2,
-		ringRadiusDesktop: 6.45,
-		ringRadiusMobile: 6.8,
-		lineThicknessDesktop: 0.086,
-		lineThicknessMobile: 0.078,
-		amplitudeDesktop: 16,
-		amplitudeMobile: 12,
-		baselineY: 2,
-		smoothing: 0.2,
-		curveEndFade: 0.08,
-		morphStrength: 80,
-		tunnelTwist: 8.6,
-		gapModAmount: 0.4,
-		gapModNoiseSpeed: 3.26,
-		gapModNoiseContrast: 2.55,
-		ghostEnabled: 1,
-		ghostOpacity: 0.23,
-		ghostScale: 0.92,
-		ghostBlurWidth: 0.42,
-		ghostThicknessMultiplier: 9.45,
-		ghostWarp: 5.8,
-		ghostTwistOffset: 0.65,
-		ghostZOffset: -2.5,
-		bendAmount: 250,
-		bendNoiseSpeed: 0.325,
-		bendDepthStrength: 1.25,
-		zRotationSpeed: 1.31,
-		emissionCurvePower: 1,
-		gradientCycleSpeed: 0.08,
-		sourceRenderMode: 0,
-		particleRadius: 0.7,
-		particleCount: 300,
-		particleRadiusVariability: 0.9,
-		particleRandomness: 0.09,
-		particleOffset: 1.1,
-		particleMoveSpeed: 0
+		curve: {
+			sourceRenderMode: 2,
+			ringRadiusDesktop: 6.45,
+			ringRadiusMobile: 6.8,
+			lineThicknessDesktop: 0.086,
+			lineThicknessMobile: 0.078,
+			amplitudeDesktop: 16,
+			amplitudeMobile: 12,
+			baselineY: 2,
+			smoothing: 0.2,
+			endFade: 0.08,
+			morphStrength: 80,
+			twist: 8.6
+		},
+		emission: {
+			gapModAmount: 0.4,
+			gapModNoiseSpeed: 3.26,
+			gapModNoiseContrast: 2.55,
+			curvePower: 1,
+			zRotationSpeed: 1.31,
+			gradientCycleSpeed: 0.08
+		},
+		ghost: {
+			enabled: 1,
+			opacity: 0.23,
+			scale: 0.92,
+			blurWidth: 0.42,
+			thicknessMultiplier: 9.45,
+			warp: 5.8,
+			twistOffset: 0.65,
+			zOffset: -2.5
+		},
+		particle: {
+			radius: 0.25,
+			count: 300,
+			radiusVariability: 0.4,
+			randomness: 0.09,
+			offset: -1.5,
+			moveSpeed: 10
+		},
+		bend: {
+			amount: 250,
+			noiseSpeed: 0.325,
+			depthStrength: 1.25
+		}
 	};
 
-	let tunnelConfig = $state({ ...initialTunnelConfig });
+	function createTunnelConfig(overrides: PartialTunnelConfig = {}): TunnelConfig {
+		return {
+			...initialTunnelConfig,
+			...overrides,
+			curve: { ...initialTunnelConfig.curve, ...overrides.curve },
+			emission: { ...initialTunnelConfig.emission, ...overrides.emission },
+			ghost: { ...initialTunnelConfig.ghost, ...overrides.ghost },
+			particle: { ...initialTunnelConfig.particle, ...overrides.particle },
+			bend: { ...initialTunnelConfig.bend, ...overrides.bend }
+		};
+	}
+
+	let tunnelConfig = $state(createTunnelConfig());
 
 	let currentWave = new Float32Array(initialTunnelConfig.segments + 1);
 	let smoothedWave = new Float32Array(initialTunnelConfig.segments + 1);
@@ -122,9 +152,9 @@
 
 	let isMobile = $derived(innerWidth < 560);
 	let renderMode = $derived(
-		tunnelConfig.sourceRenderMode === 0
+		tunnelConfig.curve.sourceRenderMode === 0
 			? 'Curves'
-			: tunnelConfig.sourceRenderMode === 1
+			: tunnelConfig.curve.sourceRenderMode === 1
 				? 'Particles'
 				: 'Curves + Particles'
 	);
@@ -239,15 +269,17 @@
 	}
 
 	function getRingRadius() {
-		return isMobile ? tunnelConfig.ringRadiusMobile : tunnelConfig.ringRadiusDesktop;
+		return isMobile ? tunnelConfig.curve.ringRadiusMobile : tunnelConfig.curve.ringRadiusDesktop;
 	}
 
 	function getLineThickness() {
-		return isMobile ? tunnelConfig.lineThicknessMobile : tunnelConfig.lineThicknessDesktop;
+		return isMobile
+			? tunnelConfig.curve.lineThicknessMobile
+			: tunnelConfig.curve.lineThicknessDesktop;
 	}
 
 	function getAmplitude() {
-		return isMobile ? tunnelConfig.amplitudeMobile : tunnelConfig.amplitudeDesktop;
+		return isMobile ? tunnelConfig.curve.amplitudeMobile : tunnelConfig.curve.amplitudeDesktop;
 	}
 
 	function rebuildWaveBuffers() {
@@ -257,23 +289,50 @@
 		setupTunnelSlices();
 	}
 
-	function setTunnelNumber(
-		key: keyof typeof tunnelConfig,
-		value: string | number,
-		rebuild = false
-	) {
+	type ConfigPath =
+		| keyof Pick<
+				TunnelConfig,
+				| 'slices'
+				| 'segments'
+				| 'emitIntervalSeconds'
+				| 'lifetimeSeconds'
+				| 'depth'
+				| 'nearZ'
+				| 'cameraZ'
+		  >
+		| `curve.${keyof TunnelConfig['curve']}`
+		| `emission.${keyof TunnelConfig['emission']}`
+		| `ghost.${keyof TunnelConfig['ghost']}`
+		| `particle.${keyof TunnelConfig['particle']}`
+		| `bend.${keyof TunnelConfig['bend']}`;
+
+	function getTunnelNumber(path: ConfigPath) {
+		const parts = String(path).split('.');
+		let value: unknown = tunnelConfig;
+		for (const part of parts) {
+			value = (value as Record<string, unknown>)[part];
+		}
+		return typeof value === 'number' ? value : 0;
+	}
+
+	function setTunnelNumber(path: ConfigPath, value: string | number, rebuild = false) {
 		const nextValue = typeof value === 'number' ? value : Number(value);
 		if (!Number.isFinite(nextValue)) return;
-		tunnelConfig[key] = nextValue;
+		const parts = String(path).split('.');
+		let target = tunnelConfig as unknown as Record<string, unknown>;
+		for (let i = 0; i < parts.length - 1; i++) {
+			target = target[parts[i]] as Record<string, unknown>;
+		}
+		target[parts[parts.length - 1]] = nextValue;
 		if (rebuild) rebuildWaveBuffers();
-		if (key === 'cameraZ' && camera) {
+		if (path === 'cameraZ' && camera) {
 			camera.position.z = tunnelConfig.cameraZ;
 			camera.lookAt(0, 0, -30);
 		}
 	}
 
 	function resetTunnelConfig() {
-		tunnelConfig = { ...initialTunnelConfig };
+		tunnelConfig = createTunnelConfig(config);
 		if (camera) {
 			camera.position.z = tunnelConfig.cameraZ;
 			camera.lookAt(0, 0, -30);
@@ -308,10 +367,13 @@
 	}
 
 	function updateEmitInterval(delta: number) {
-		gapNoiseTime += delta * tunnelConfig.gapModNoiseSpeed;
-		const gapNoise = contrastNoise(valueNoise1D(gapNoiseTime), tunnelConfig.gapModNoiseContrast);
+		gapNoiseTime += delta * tunnelConfig.emission.gapModNoiseSpeed;
+		const gapNoise = contrastNoise(
+			valueNoise1D(gapNoiseTime),
+			tunnelConfig.emission.gapModNoiseContrast
+		);
 		const centeredNoise = gapNoise * 2 - 1;
-		const modulationWidth = Math.max(0, tunnelConfig.gapModAmount);
+		const modulationWidth = Math.max(0, tunnelConfig.emission.gapModAmount);
 		currentEmitInterval = Math.max(
 			0.005,
 			tunnelConfig.emitIntervalSeconds + centeredNoise * modulationWidth
@@ -319,12 +381,12 @@
 	}
 
 	function getBendOffset(age: number) {
-		const depthWeight = Math.pow(MathUtils.clamp(age, 0, 1), tunnelConfig.bendDepthStrength);
+		const depthWeight = Math.pow(MathUtils.clamp(age, 0, 1), tunnelConfig.bend.depthStrength);
 		const bendX = (valueNoise1D(bendNoiseTime + age * 0.85) - 0.5) * 2;
 		const bendY = (valueNoise1D(bendNoiseTime + 91.7 + age * 0.85) - 0.5) * 2;
 		return {
-			x: bendX * tunnelConfig.bendAmount * depthWeight,
-			y: bendY * tunnelConfig.bendAmount * depthWeight
+			x: bendX * tunnelConfig.bend.amount * depthWeight,
+			y: bendY * tunnelConfig.bend.amount * depthWeight
 		};
 	}
 
@@ -371,7 +433,7 @@
 		const bandSize = Math.max(1, highIdx - lowIdx);
 		const amplitude = getAmplitude();
 
-		const smoothing = MathUtils.clamp(tunnelConfig.smoothing, 0, 0.995);
+		const smoothing = MathUtils.clamp(tunnelConfig.curve.smoothing, 0, 0.995);
 		const temporalAlpha = MathUtils.lerp(1, 0.04, smoothing);
 
 		for (let i = 0; i <= tunnelConfig.segments; i++) {
@@ -393,7 +455,7 @@
 			const peakPct = peak / 255;
 			const pct = Math.min(1, avgPct * 0.45 + peakPct * 0.95);
 			const shaped = Math.pow(Math.max(0, pct - 0.04) / 0.96, 0.58);
-			currentWave[i] = tunnelConfig.baselineY + shaped * amplitude;
+			currentWave[i] = tunnelConfig.curve.baselineY + shaped * amplitude;
 			smoothedWave[i] = MathUtils.lerp(smoothedWave[i], currentWave[i], temporalAlpha);
 		}
 
@@ -445,7 +507,7 @@
 	}
 
 	function createParticleGeometry() {
-		const count = Math.max(0, Math.floor(tunnelConfig.particleCount));
+		const count = Math.max(0, Math.floor(tunnelConfig.particle.count));
 		const positions = new Float32Array(count * 3);
 		const sizes = new Float32Array(count);
 		const geometry = new BufferGeometry();
@@ -483,22 +545,22 @@
 			uniforms: {
 				uTime: { value: 0 },
 				uAge: { value: 1 },
-				uMorphStrength: { value: tunnelConfig.morphStrength },
-				uTwist: { value: tunnelConfig.tunnelTwist },
-				uWarpStrength: { value: isGhost ? tunnelConfig.ghostWarp : 0 },
-				uTwistOffset: { value: isGhost ? tunnelConfig.ghostTwistOffset : 0 },
+				uMorphStrength: { value: tunnelConfig.curve.morphStrength },
+				uTwist: { value: tunnelConfig.curve.twist },
+				uWarpStrength: { value: isGhost ? tunnelConfig.ghost.warp : 0 },
+				uTwistOffset: { value: isGhost ? tunnelConfig.ghost.twistOffset : 0 },
 				uThicknessBoost: {
 					value: isGhost
 						? getLineThickness() *
-							(tunnelConfig.ghostThicknessMultiplier - 1 + tunnelConfig.ghostBlurWidth * 18)
+							(tunnelConfig.ghost.thicknessMultiplier - 1 + tunnelConfig.ghost.blurWidth * 18)
 						: 0
 				},
 				uColorA: { value: a },
 				uColorB: { value: b },
 				uPulse: { value: 0 },
-				uOpacity: { value: isGhost ? tunnelConfig.ghostOpacity : 1 },
-				uBlurWidth: { value: isGhost ? tunnelConfig.ghostBlurWidth : 0 },
-				uEndFade: { value: tunnelConfig.curveEndFade }
+				uOpacity: { value: isGhost ? tunnelConfig.ghost.opacity : 1 },
+				uBlurWidth: { value: isGhost ? tunnelConfig.ghost.blurWidth : 0 },
+				uEndFade: { value: tunnelConfig.curve.endFade }
 			},
 			transparent: true,
 			depthWrite: false,
@@ -596,16 +658,16 @@
 
 	function writeSliceParticles(slice: TunnelSlice) {
 		const ringRadius = getRingRadius();
-		const randomness = MathUtils.clamp(tunnelConfig.particleRandomness, 0, 1);
-		const sizeBase = Math.max(0, tunnelConfig.particleRadius);
-		const sizeVariance = Math.max(0, tunnelConfig.particleRadiusVariability);
-		const particleCount = Math.max(0, Math.floor(tunnelConfig.particleCount));
+		const randomness = MathUtils.clamp(tunnelConfig.particle.randomness, 0, 1);
+		const sizeBase = Math.max(0, tunnelConfig.particle.radius);
+		const sizeVariance = Math.max(0, tunnelConfig.particle.radiusVariability);
+		const particleCount = Math.max(0, Math.floor(tunnelConfig.particle.count));
 		for (let i = 0; i < particleCount; i++) {
 			const evenT = particleCount <= 1 ? 0 : i / particleCount;
 			const randomT = Math.random();
 			const t = MathUtils.lerp(evenT, randomT, randomness);
 			const angle = t * Math.PI * 2;
-			const radius = ringRadius + sampleSmoothedWave(t) + tunnelConfig.particleOffset;
+			const radius = ringRadius + sampleSmoothedWave(t) + tunnelConfig.particle.offset;
 			const offset = i * 3;
 			slice.particlePositions[offset] = Math.cos(angle) * radius;
 			slice.particlePositions[offset + 1] = Math.sin(angle) * radius;
@@ -625,17 +687,18 @@
 		if (!slice) return;
 		writeSliceGeometry(slice);
 		writeSliceParticles(slice);
-		slice.color.copy(sampleTunnelGradient(timeSeconds * tunnelConfig.gradientCycleSpeed));
-		slice.zRotation = timeSeconds * tunnelConfig.zRotationSpeed;
+		slice.color.copy(sampleTunnelGradient(timeSeconds * tunnelConfig.emission.gradientCycleSpeed));
+		slice.zRotation = timeSeconds * tunnelConfig.emission.zRotationSpeed;
 		slice.age = 0;
 		slice.active = true;
-		slice.mesh.visible = tunnelConfig.sourceRenderMode === 0 || tunnelConfig.sourceRenderMode === 2;
+		slice.mesh.visible =
+			tunnelConfig.curve.sourceRenderMode === 0 || tunnelConfig.curve.sourceRenderMode === 2;
 		slice.particleLayer.visible =
-			tunnelConfig.sourceRenderMode === 1 || tunnelConfig.sourceRenderMode === 2;
-		slice.ghostMesh.visible = tunnelConfig.ghostEnabled > 0;
+			tunnelConfig.curve.sourceRenderMode === 1 || tunnelConfig.curve.sourceRenderMode === 2;
+		slice.ghostMesh.visible = tunnelConfig.ghost.enabled > 0;
 		slice.mesh.position.set(0, 0, tunnelConfig.nearZ);
 		slice.particleLayer.position.set(0, 0, tunnelConfig.nearZ);
-		slice.ghostMesh.position.set(0, 0, tunnelConfig.nearZ + tunnelConfig.ghostZOffset);
+		slice.ghostMesh.position.set(0, 0, tunnelConfig.nearZ + tunnelConfig.ghost.zOffset);
 		slice.mesh.rotation.set(0, 0, 0);
 		slice.particleLayer.rotation.set(0, 0, 0);
 		slice.ghostMesh.rotation.set(0, 0, 0);
@@ -659,14 +722,14 @@
 			}
 
 			const age = slice.age;
-			const curvedAge = Math.pow(age, Math.max(0.05, tunnelConfig.emissionCurvePower));
+			const curvedAge = Math.pow(age, Math.max(0.05, tunnelConfig.emission.curvePower));
 			const z = tunnelConfig.nearZ - curvedAge * tunnelConfig.depth;
 			const scale = 0.84 + curvedAge * curvedAge * 4.9;
 			const bend = getBendOffset(age);
 			const sourceUsesCurves =
-				tunnelConfig.sourceRenderMode === 0 || tunnelConfig.sourceRenderMode === 2;
+				tunnelConfig.curve.sourceRenderMode === 0 || tunnelConfig.curve.sourceRenderMode === 2;
 			const sourceUsesParticles =
-				tunnelConfig.sourceRenderMode === 1 || tunnelConfig.sourceRenderMode === 2;
+				tunnelConfig.curve.sourceRenderMode === 1 || tunnelConfig.curve.sourceRenderMode === 2;
 			slice.mesh.visible = sourceUsesCurves;
 			slice.particleLayer.visible = sourceUsesParticles;
 			slice.mesh.position.x = bend.x;
@@ -675,50 +738,50 @@
 			slice.particleLayer.position.x = bend.x;
 			slice.particleLayer.position.y = bend.y;
 			slice.particleLayer.position.z =
-				z + tunnelConfig.particleMoveSpeed * age * tunnelConfig.lifetimeSeconds;
+				z + tunnelConfig.particle.moveSpeed * age * tunnelConfig.lifetimeSeconds;
 			slice.mesh.scale.setScalar(scale);
 			slice.particleLayer.scale.setScalar(scale);
 			slice.mesh.rotation.z =
-				age * tunnelConfig.tunnelTwist +
+				age * tunnelConfig.curve.twist +
 				slice.zRotation +
 				Math.sin(timeSeconds * 0.24 + age * 10) * 0.35;
 			slice.particleLayer.rotation.z = slice.mesh.rotation.z;
-			slice.ghostMesh.visible = tunnelConfig.ghostEnabled > 0;
+			slice.ghostMesh.visible = tunnelConfig.ghost.enabled > 0;
 			slice.ghostMesh.position.x = bend.x;
 			slice.ghostMesh.position.y = bend.y;
-			slice.ghostMesh.position.z = z + tunnelConfig.ghostZOffset;
-			slice.ghostMesh.scale.setScalar(scale * tunnelConfig.ghostScale);
+			slice.ghostMesh.position.z = z + tunnelConfig.ghost.zOffset;
+			slice.ghostMesh.scale.setScalar(scale * tunnelConfig.ghost.scale);
 			slice.ghostMesh.rotation.z =
 				slice.mesh.rotation.z +
-				tunnelConfig.ghostTwistOffset +
+				tunnelConfig.ghost.twistOffset +
 				Math.sin(timeSeconds * 0.31 + age * 12) * 0.22;
 			slice.mesh.material.uniforms.uTime.value = timeSeconds;
 			slice.mesh.material.uniforms.uAge.value = age;
-			slice.mesh.material.uniforms.uMorphStrength.value = tunnelConfig.morphStrength;
-			slice.mesh.material.uniforms.uTwist.value = tunnelConfig.tunnelTwist;
+			slice.mesh.material.uniforms.uMorphStrength.value = tunnelConfig.curve.morphStrength;
+			slice.mesh.material.uniforms.uTwist.value = tunnelConfig.curve.twist;
 			slice.mesh.material.uniforms.uColorA.value.copy(slice.color);
 			slice.mesh.material.uniforms.uColorB.value.copy(slice.color);
 			slice.mesh.material.uniforms.uPulse.value = pulse;
-			slice.mesh.material.uniforms.uEndFade.value = tunnelConfig.curveEndFade;
+			slice.mesh.material.uniforms.uEndFade.value = tunnelConfig.curve.endFade;
 			slice.particleLayer.material.uniforms.uPixelRatio.value = getPixelRatio();
 			slice.particleLayer.material.uniforms.uAge.value = age;
 			slice.particleLayer.material.uniforms.uColor.value.copy(slice.color);
 			slice.particleLayer.material.uniforms.uOpacity.value = 1;
 			slice.ghostMesh.material.uniforms.uTime.value = timeSeconds;
 			slice.ghostMesh.material.uniforms.uAge.value = age;
-			slice.ghostMesh.material.uniforms.uMorphStrength.value = tunnelConfig.morphStrength;
-			slice.ghostMesh.material.uniforms.uTwist.value = tunnelConfig.tunnelTwist;
-			slice.ghostMesh.material.uniforms.uWarpStrength.value = tunnelConfig.ghostWarp;
-			slice.ghostMesh.material.uniforms.uTwistOffset.value = tunnelConfig.ghostTwistOffset;
+			slice.ghostMesh.material.uniforms.uMorphStrength.value = tunnelConfig.curve.morphStrength;
+			slice.ghostMesh.material.uniforms.uTwist.value = tunnelConfig.curve.twist;
+			slice.ghostMesh.material.uniforms.uWarpStrength.value = tunnelConfig.ghost.warp;
+			slice.ghostMesh.material.uniforms.uTwistOffset.value = tunnelConfig.ghost.twistOffset;
 			slice.ghostMesh.material.uniforms.uThicknessBoost.value =
 				getLineThickness() *
-				(tunnelConfig.ghostThicknessMultiplier - 1 + tunnelConfig.ghostBlurWidth * 18);
+				(tunnelConfig.ghost.thicknessMultiplier - 1 + tunnelConfig.ghost.blurWidth * 18);
 			slice.ghostMesh.material.uniforms.uColorA.value.copy(slice.color);
 			slice.ghostMesh.material.uniforms.uColorB.value.copy(slice.color);
 			slice.ghostMesh.material.uniforms.uPulse.value = pulse;
-			slice.ghostMesh.material.uniforms.uOpacity.value = tunnelConfig.ghostOpacity;
-			slice.ghostMesh.material.uniforms.uBlurWidth.value = tunnelConfig.ghostBlurWidth;
-			slice.ghostMesh.material.uniforms.uEndFade.value = tunnelConfig.curveEndFade;
+			slice.ghostMesh.material.uniforms.uOpacity.value = tunnelConfig.ghost.opacity;
+			slice.ghostMesh.material.uniforms.uBlurWidth.value = tunnelConfig.ghost.blurWidth;
+			slice.ghostMesh.material.uniforms.uEndFade.value = tunnelConfig.curve.endFade;
 		}
 	}
 
@@ -759,7 +822,7 @@
 		const delta = previousFrameTime ? Math.min(0.05, (now - previousFrameTime) / 1000) : 1 / 60;
 		previousFrameTime = now;
 		timeSeconds += delta;
-		bendNoiseTime += delta * tunnelConfig.bendNoiseSpeed;
+		bendNoiseTime += delta * tunnelConfig.bend.noiseSpeed;
 		updateEmitInterval(delta);
 		syncAnalyserData();
 
@@ -804,6 +867,7 @@
 	}
 
 	onMount(() => {
+		tunnelConfig = createTunnelConfig(config);
 		initThree();
 	});
 
@@ -818,7 +882,7 @@
 
 {#snippet rangeControl(
 	label: string,
-	key: keyof typeof tunnelConfig,
+	key: ConfigPath,
 	min: number,
 	max: number,
 	step: number,
@@ -832,14 +896,14 @@
 				{min}
 				{max}
 				{step}
-				value={tunnelConfig[key]}
+				value={getTunnelNumber(key)}
 				oninput={(event) => setTunnelNumber(key, event.currentTarget.value, rebuild)}
 			/>
 			<input
 				class="tunnel-number"
 				type="number"
 				{step}
-				value={tunnelConfig[key]}
+				value={getTunnelNumber(key)}
 				onchange={(event) => setTunnelNumber(key, event.currentTarget.value, rebuild)}
 			/>
 		</div>
@@ -863,55 +927,55 @@
 			<div class="tunnel-controls-scroll">
 				{@render rangeControl('Slices', 'slices', 12, 180, 1, true)}
 				{@render rangeControl('Segments', 'segments', 24, 360, 1, true)}
-				{@render rangeControl(`Mode: ${renderMode}`, 'sourceRenderMode', 0, 2, 1)}
-				{#if tunnelConfig.sourceRenderMode > 0}
-					{@render rangeControl('Particle count', 'particleCount', 0, 600, 1, true)}
-					{@render rangeControl('Particle radius', 'particleRadius', 0, 24, 0.1)}
+				{@render rangeControl(`Mode: ${renderMode}`, 'curve.sourceRenderMode', 0, 2, 1)}
+				{#if tunnelConfig.curve.sourceRenderMode > 0}
+					{@render rangeControl('Particle count', 'particle.count', 0, 600, 1, true)}
+					{@render rangeControl('Particle radius', 'particle.radius', 0, 24, 0.1)}
 					{@render rangeControl(
 						'Particle radius variability',
-						'particleRadiusVariability',
+						'particle.radiusVariability',
 						0,
 						24,
 						0.1
 					)}
-					{@render rangeControl('Particle randomness', 'particleRandomness', 0, 1, 0.01)}
-					{@render rangeControl('Particle offset', 'particleOffset', -12, 12, 0.05)}
-					{@render rangeControl('Particle move speed', 'particleMoveSpeed', -5, 5, 0.05)}
+					{@render rangeControl('Particle randomness', 'particle.randomness', 0, 1, 0.01)}
+					{@render rangeControl('Particle offset', 'particle.offset', -12, 12, 0.05)}
+					{@render rangeControl('Particle move speed', 'particle.moveSpeed', -5, 5, 0.05)}
 				{/if}
 				{@render rangeControl('Emit gap', 'emitIntervalSeconds', 0.01, 0.25, 0.005)}
 				<div class="tunnel-readout">Animated gap {currentEmitInterval.toFixed(3)}s</div>
-				{@render rangeControl('Gap modulation width', 'gapModAmount', 0, 0.5, 0.005)}
-				{@render rangeControl('Gap modulation speed', 'gapModNoiseSpeed', 0, 5, 0.01)}
-				{@render rangeControl('Gap noise contrast', 'gapModNoiseContrast', 0.1, 8, 0.05)}
+				{@render rangeControl('Gap modulation width', 'emission.gapModAmount', 0, 0.5, 0.005)}
+				{@render rangeControl('Gap modulation speed', 'emission.gapModNoiseSpeed', 0, 5, 0.01)}
+				{@render rangeControl('Gap noise contrast', 'emission.gapModNoiseContrast', 0.1, 8, 0.05)}
 				{@render rangeControl('Lifetime', 'lifetimeSeconds', 0.8, 12, 0.1)}
-				{@render rangeControl('Emission curve', 'emissionCurvePower', 0.05, 5, 0.05)}
+				{@render rangeControl('Emission curve', 'emission.curvePower', 0.05, 5, 0.05)}
 				{@render rangeControl('Depth', 'depth', 20, 360, 1)}
 				{@render rangeControl('Near Z', 'nearZ', -30, 2, 0.1)}
 				{@render rangeControl('Camera Z', 'cameraZ', 2, 30, 0.1)}
-				{@render rangeControl('Z rotation speed', 'zRotationSpeed', -4, 4, 0.01)}
-				{@render rangeControl('Gradient cycle speed', 'gradientCycleSpeed', -2, 2, 0.01)}
-				{@render rangeControl('Radius desktop', 'ringRadiusDesktop', 0.2, 14, 0.05)}
-				{@render rangeControl('Radius mobile', 'ringRadiusMobile', 0.2, 8, 0.05)}
-				{@render rangeControl('Thickness desktop', 'lineThicknessDesktop', 0.002, 0.3, 0.002)}
-				{@render rangeControl('Thickness mobile', 'lineThicknessMobile', 0.002, 0.2, 0.002)}
-				{@render rangeControl('Amplitude desktop', 'amplitudeDesktop', 0, 20, 0.05)}
-				{@render rangeControl('Amplitude mobile', 'amplitudeMobile', 0, 20, 0.05)}
-				{@render rangeControl('Baseline', 'baselineY', -4, 4, 0.05)}
-				{@render rangeControl('Smoothing', 'smoothing', 0, 0.98, 0.01)}
-				{@render rangeControl('Curve end fade', 'curveEndFade', 0, 0.5, 0.005)}
-				{@render rangeControl('Morph', 'morphStrength', 0, 120, 0.05)}
-				{@render rangeControl('Twist', 'tunnelTwist', -12, 12, 0.1)}
-				{@render rangeControl('Ghost on', 'ghostEnabled', 0, 1, 1)}
-				{@render rangeControl('Ghost opacity', 'ghostOpacity', 0, 1, 0.01)}
-				{@render rangeControl('Ghost scale', 'ghostScale', 0.8, 1.4, 0.005)}
-				{@render rangeControl('Ghost blur', 'ghostBlurWidth', 0, 1.2, 0.01)}
-				{@render rangeControl('Ghost thickness', 'ghostThicknessMultiplier', 0, 12, 0.05)}
-				{@render rangeControl('Ghost warp', 'ghostWarp', 0, 6, 0.05)}
-				{@render rangeControl('Ghost twist offset', 'ghostTwistOffset', -4, 4, 0.05)}
-				{@render rangeControl('Ghost Z offset', 'ghostZOffset', -20, 20, 0.1)}
-				{@render rangeControl('Bend amount', 'bendAmount', 0, 300, 0.1)}
-				{@render rangeControl('Bend speed', 'bendNoiseSpeed', 0, 1, 0.005)}
-				{@render rangeControl('Bend depth strength', 'bendDepthStrength', 0, 4, 0.05)}
+				{@render rangeControl('Z rotation speed', 'emission.zRotationSpeed', -4, 4, 0.01)}
+				{@render rangeControl('Gradient cycle speed', 'emission.gradientCycleSpeed', -2, 2, 0.01)}
+				{@render rangeControl('Radius desktop', 'curve.ringRadiusDesktop', 0.2, 14, 0.05)}
+				{@render rangeControl('Radius mobile', 'curve.ringRadiusMobile', 0.2, 8, 0.05)}
+				{@render rangeControl('Thickness desktop', 'curve.lineThicknessDesktop', 0.002, 0.3, 0.002)}
+				{@render rangeControl('Thickness mobile', 'curve.lineThicknessMobile', 0.002, 0.2, 0.002)}
+				{@render rangeControl('Amplitude desktop', 'curve.amplitudeDesktop', 0, 20, 0.05)}
+				{@render rangeControl('Amplitude mobile', 'curve.amplitudeMobile', 0, 20, 0.05)}
+				{@render rangeControl('Baseline', 'curve.baselineY', -4, 4, 0.05)}
+				{@render rangeControl('Smoothing', 'curve.smoothing', 0, 0.98, 0.01)}
+				{@render rangeControl('Curve end fade', 'curve.endFade', 0, 0.5, 0.005)}
+				{@render rangeControl('Morph', 'curve.morphStrength', 0, 120, 0.05)}
+				{@render rangeControl('Twist', 'curve.twist', -12, 12, 0.1)}
+				{@render rangeControl('Ghost on', 'ghost.enabled', 0, 1, 1)}
+				{@render rangeControl('Ghost opacity', 'ghost.opacity', 0, 1, 0.01)}
+				{@render rangeControl('Ghost scale', 'ghost.scale', 0.8, 1.4, 0.005)}
+				{@render rangeControl('Ghost blur', 'ghost.blurWidth', 0, 1.2, 0.01)}
+				{@render rangeControl('Ghost thickness', 'ghost.thicknessMultiplier', 0, 12, 0.05)}
+				{@render rangeControl('Ghost warp', 'ghost.warp', 0, 6, 0.05)}
+				{@render rangeControl('Ghost twist offset', 'ghost.twistOffset', -4, 4, 0.05)}
+				{@render rangeControl('Ghost Z offset', 'ghost.zOffset', -20, 20, 0.1)}
+				{@render rangeControl('Bend amount', 'bend.amount', 0, 300, 0.1)}
+				{@render rangeControl('Bend speed', 'bend.noiseSpeed', 0, 1, 0.005)}
+				{@render rangeControl('Bend depth strength', 'bend.depthStrength', 0, 4, 0.05)}
 			</div>
 		</div>
 	</div>
