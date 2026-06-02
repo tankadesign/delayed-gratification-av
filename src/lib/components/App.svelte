@@ -23,7 +23,20 @@
 	const freqLow = 20; // Hz — low frequency cutoff for both visualizers
 	const freqHigh = 18000; // Hz — high frequency cutoff for both visualizers
 
+	function isEditableTarget(target: EventTarget | null) {
+		if (!(target instanceof HTMLElement)) return false;
+		const tagName = target.tagName.toLowerCase();
+		return (
+			tagName === 'input' ||
+			tagName === 'textarea' ||
+			tagName === 'select' ||
+			target.isContentEditable
+		);
+	}
+
 	function onVisualizerKeydown(event: KeyboardEvent) {
+		if (isEditableTarget(event.target)) return;
+
 		switch (event.key) {
 			case 'i':
 				isInterfaceHidden = !isInterfaceHidden;
