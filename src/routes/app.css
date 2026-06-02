@@ -69,3 +69,30 @@ button:focus,
 button:focus-visible {
 	outline: 4px auto -webkit-focus-ring-color;
 }
+
+input[type=range] {
+	-webkit-appearance: none;
+	appearance: none;
+	height: 20px;
+	background: transparent;
+	border:1px solid rgba(255, 255, 255, 0.18);
+}
+input[type=range]::-webkit-slider-thumb {
+	-webkit-appearance: none;
+	appearance: none;
+	width: 24px;
+	height: 8px;
+	background-color: white;
+	border-radius: 2px;
+	cursor: pointer;
+	transition: background-color 0.25s;
+}
+input[type=range]:focus-visible {
+	outline: none;
+}
+input[type=range]::-webkit-slider-runnable-track {
+	background: rgba(255, 255, 255, 0.05);
+}
+input[type=range]:focus-visible::-webkit-slider-runnable-track {
+	background: rgba(255, 255, 255, 0.28);
+}

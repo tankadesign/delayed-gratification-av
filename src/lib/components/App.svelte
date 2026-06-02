@@ -19,6 +19,7 @@
 	let activeVisualizerIndex = $state(1);
 	let isInterfaceHidden = $state(false);
 	let hasConnectedAnalyserOutput = $state(false);
+	let isShowingControls = $state(false);
 
 	const freqLow = 20; // Hz — low frequency cutoff for both visualizers
 	const freqHigh = 18000; // Hz — high frequency cutoff for both visualizers
@@ -51,6 +52,9 @@
 				break;
 			case '-':
 				activeVisualizerIndex = (activeVisualizerIndex - 1 + totalVisualizers) % totalVisualizers;
+				break;
+			case 'c':
+				isShowingControls = !isShowingControls;
 				break;
 			case 'Escape':
 				isInterfaceHidden = false;
@@ -117,7 +121,7 @@
 {#if activeVisualizerIndex === 0}
 	<Visualizer3D_01 {currentTrack} {music} {freqLow} {freqHigh} />
 {:else if activeVisualizerIndex === 1}
-	<Visualizer3D_02 {currentTrack} {music} {freqLow} {freqHigh} />
+	<Visualizer3D_02 {currentTrack} {music} {freqLow} {freqHigh} {isShowingControls} />
 {:else if activeVisualizerIndex === 2}
 	<Visualizer2D {currentTrack} {music} {freqLow} {freqHigh} />
 {/if}

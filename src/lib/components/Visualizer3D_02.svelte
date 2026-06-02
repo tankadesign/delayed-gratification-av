@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { dev } from '$app/environment';
 	import { store } from '$lib/store.svelte';
 	import type { Track } from '$lib/types';
 	import { onDestroy, onMount } from 'svelte';
@@ -22,6 +23,7 @@
 		music?: HTMLAudioElement | null;
 		freqLow?: number;
 		freqHigh?: number;
+		isShowingControls?: boolean;
 	}
 
 	interface TunnelSlice {
@@ -34,7 +36,13 @@
 		active: boolean;
 	}
 
-	let { currentTrack = null, music = null, freqLow = 35, freqHigh = 14000 }: Props = $props();
+	let {
+		currentTrack = null,
+		music = null,
+		freqLow = 35,
+		freqHigh = 14000,
+		isShowingControls = false
+	}: Props = $props();
 
 	let canvasEl = $state<HTMLCanvasElement>();
 	let innerWidth = $state(typeof window === 'undefined' ? 393 : window.innerWidth);
@@ -54,12 +62,11 @@
 	let bendNoiseTime = 0;
 	let sliceCursor = 0;
 	let resizeHandler: (() => void) | null = null;
-	let showTunnelControls = $state(true);
 	let didCopyTunnelConfig = $state(false);
 
 	const initialTunnelConfig = {
 		slices: 180,
-		segments: 200,
+		segments: 290,
 		emitIntervalSeconds: 0.105,
 		lifetimeSeconds: 10.8,
 		depth: 288,
@@ -702,66 +709,63 @@
 	</label>
 {/snippet}
 
-<div class="tunnel-controls" class:collapsed={!showTunnelControls}>
-	<button
-		class="tunnel-controls-toggle"
-		type="button"
-		onclick={() => (showTunnelControls = !showTunnelControls)}
-	>
-		{showTunnelControls ? 'Hide 3D_02 Controls' : 'Show 3D_02 Controls'}
-	</button>
-	{#if showTunnelControls}
+{#if isShowingControls}
+	<div class="tunnel-controls">
 		<div class="tunnel-controls-panel">
 			<div class="tunnel-controls-header">
 				<strong>Tunnel Shader</strong>
 				<div class="tunnel-controls-actions">
-					<button type="button" onclick={copyTunnelConfig}>
-						{didCopyTunnelConfig ? 'Copied' : 'Copy'}
-					</button>
+					{#if dev}
+						<button type="button" onclick={copyTunnelConfig}>
+							{didCopyTunnelConfig ? 'Copied' : 'Copy'}
+						</button>
+					{/if}
 					<button type="button" onclick={resetTunnelConfig}>Reset</button>
 				</div>
 			</div>
-			{@render rangeControl('Slices', 'slices', 12, 180, 1, true)}
-			{@render rangeControl('Segments', 'segments', 24, 360, 1, true)}
-			{@render rangeControl('Emit gap', 'emitIntervalSeconds', 0.01, 0.25, 0.005)}
-			<div class="tunnel-readout">Animated gap {currentEmitInterval.toFixed(3)}s</div>
-			{@render rangeControl('Gap modulation', 'gapModAmount', 0, 1, 0.01)}
-			{@render rangeControl('Gap speed min', 'gapModNoiseSpeedMin', 0.01, 2, 0.01)}
-			{@render rangeControl('Gap speed max', 'gapModNoiseSpeedMax', 0.01, 5, 0.01)}
-			{@render rangeControl('Gap noise contrast', 'gapModNoiseContrast', 0.1, 8, 0.05)}
-			{@render rangeControl('Gap noise bias', 'gapModNoiseBias', -1, 1, 0.01)}
-			{@render rangeControl('Lifetime', 'lifetimeSeconds', 0.8, 12, 0.1)}
-			{@render rangeControl('Emission curve', 'emissionCurvePower', 0.05, 5, 0.05)}
-			{@render rangeControl('Depth', 'depth', 20, 360, 1)}
-			{@render rangeControl('Near Z', 'nearZ', -30, 2, 0.1)}
-			{@render rangeControl('Camera Z', 'cameraZ', 2, 30, 0.1)}
-			{@render rangeControl('Z rotation speed', 'zRotationSpeed', -4, 4, 0.01)}
-			{@render rangeControl('Gradient cycle speed', 'gradientCycleSpeed', -2, 2, 0.01)}
-			{@render rangeControl('Radius desktop', 'ringRadiusDesktop', 0.2, 14, 0.05)}
-			{@render rangeControl('Radius mobile', 'ringRadiusMobile', 0.2, 8, 0.05)}
-			{@render rangeControl('Thickness desktop', 'lineThicknessDesktop', 0.002, 0.3, 0.002)}
-			{@render rangeControl('Thickness mobile', 'lineThicknessMobile', 0.002, 0.2, 0.002)}
-			{@render rangeControl('Amplitude desktop', 'amplitudeDesktop', 0, 8, 0.05)}
-			{@render rangeControl('Amplitude mobile', 'amplitudeMobile', 0, 5, 0.05)}
-			{@render rangeControl('Baseline', 'baselineY', -4, 4, 0.05)}
-			{@render rangeControl('Smoothing', 'smoothing', 0, 0.98, 0.01)}
-			{@render rangeControl('Curve end fade', 'curveEndFade', 0, 0.5, 0.005)}
-			{@render rangeControl('Morph', 'morphStrength', 0, 4, 0.05)}
-			{@render rangeControl('Twist', 'tunnelTwist', -12, 12, 0.1)}
-			{@render rangeControl('Ghost on', 'ghostEnabled', 0, 1, 1)}
-			{@render rangeControl('Ghost opacity', 'ghostOpacity', 0, 1, 0.01)}
-			{@render rangeControl('Ghost scale', 'ghostScale', 0.8, 1.4, 0.005)}
-			{@render rangeControl('Ghost blur', 'ghostBlurWidth', 0, 1.2, 0.01)}
-			{@render rangeControl('Ghost thickness', 'ghostThicknessMultiplier', 0, 12, 0.05)}
-			{@render rangeControl('Ghost warp', 'ghostWarp', 0, 6, 0.05)}
-			{@render rangeControl('Ghost twist offset', 'ghostTwistOffset', -4, 4, 0.05)}
-			{@render rangeControl('Ghost Z offset', 'ghostZOffset', -20, 20, 0.1)}
-			{@render rangeControl('Bend amount', 'bendAmount', 0, 20, 0.1)}
-			{@render rangeControl('Bend speed', 'bendNoiseSpeed', 0, 1, 0.005)}
-			{@render rangeControl('Bend depth strength', 'bendDepthStrength', 0, 4, 0.05)}
+			<div class="tunnel-controls-scroll">
+				{@render rangeControl('Slices', 'slices', 12, 180, 1, true)}
+				{@render rangeControl('Segments', 'segments', 24, 360, 1, true)}
+				{@render rangeControl('Emit gap', 'emitIntervalSeconds', 0.01, 0.25, 0.005)}
+				<div class="tunnel-readout">Animated gap {currentEmitInterval.toFixed(3)}s</div>
+				{@render rangeControl('Gap modulation', 'gapModAmount', 0, 1, 0.01)}
+				{@render rangeControl('Gap speed min', 'gapModNoiseSpeedMin', 0.01, 2, 0.01)}
+				{@render rangeControl('Gap speed max', 'gapModNoiseSpeedMax', 0.01, 5, 0.01)}
+				{@render rangeControl('Gap noise contrast', 'gapModNoiseContrast', 0.1, 8, 0.05)}
+				{@render rangeControl('Gap noise bias', 'gapModNoiseBias', -1, 1, 0.01)}
+				{@render rangeControl('Lifetime', 'lifetimeSeconds', 0.8, 12, 0.1)}
+				{@render rangeControl('Emission curve', 'emissionCurvePower', 0.05, 5, 0.05)}
+				{@render rangeControl('Depth', 'depth', 20, 360, 1)}
+				{@render rangeControl('Near Z', 'nearZ', -30, 2, 0.1)}
+				{@render rangeControl('Camera Z', 'cameraZ', 2, 30, 0.1)}
+				{@render rangeControl('Z rotation speed', 'zRotationSpeed', -4, 4, 0.01)}
+				{@render rangeControl('Gradient cycle speed', 'gradientCycleSpeed', -2, 2, 0.01)}
+				{@render rangeControl('Radius desktop', 'ringRadiusDesktop', 0.2, 14, 0.05)}
+				{@render rangeControl('Radius mobile', 'ringRadiusMobile', 0.2, 8, 0.05)}
+				{@render rangeControl('Thickness desktop', 'lineThicknessDesktop', 0.002, 0.3, 0.002)}
+				{@render rangeControl('Thickness mobile', 'lineThicknessMobile', 0.002, 0.2, 0.002)}
+				{@render rangeControl('Amplitude desktop', 'amplitudeDesktop', 0, 20, 0.05)}
+				{@render rangeControl('Amplitude mobile', 'amplitudeMobile', 0, 20, 0.05)}
+				{@render rangeControl('Baseline', 'baselineY', -4, 4, 0.05)}
+				{@render rangeControl('Smoothing', 'smoothing', 0, 0.98, 0.01)}
+				{@render rangeControl('Curve end fade', 'curveEndFade', 0, 0.5, 0.005)}
+				{@render rangeControl('Morph', 'morphStrength', 0, 120, 0.05)}
+				{@render rangeControl('Twist', 'tunnelTwist', -12, 12, 0.1)}
+				{@render rangeControl('Ghost on', 'ghostEnabled', 0, 1, 1)}
+				{@render rangeControl('Ghost opacity', 'ghostOpacity', 0, 1, 0.01)}
+				{@render rangeControl('Ghost scale', 'ghostScale', 0.8, 1.4, 0.005)}
+				{@render rangeControl('Ghost blur', 'ghostBlurWidth', 0, 1.2, 0.01)}
+				{@render rangeControl('Ghost thickness', 'ghostThicknessMultiplier', 0, 12, 0.05)}
+				{@render rangeControl('Ghost warp', 'ghostWarp', 0, 6, 0.05)}
+				{@render rangeControl('Ghost twist offset', 'ghostTwistOffset', -4, 4, 0.05)}
+				{@render rangeControl('Ghost Z offset', 'ghostZOffset', -20, 20, 0.1)}
+				{@render rangeControl('Bend amount', 'bendAmount', 0, 300, 0.1)}
+				{@render rangeControl('Bend speed', 'bendNoiseSpeed', 0, 1, 0.005)}
+				{@render rangeControl('Bend depth strength', 'bendDepthStrength', 0, 4, 0.05)}
+			</div>
 		</div>
-	{/if}
-</div>
+	</div>
+{/if}
 
 <style>
 	canvas {
@@ -784,7 +788,6 @@
 		font-size: 12px;
 	}
 
-	.tunnel-controls-toggle,
 	.tunnel-controls button {
 		border: 1px solid rgba(255, 255, 255, 0.24);
 		background: rgba(4, 5, 16, 0.78);
@@ -793,21 +796,16 @@
 		cursor: pointer;
 	}
 
-	.tunnel-controls-toggle {
-		width: 100%;
-		border-radius: 6px;
-	}
-
 	.tunnel-controls-panel {
 		margin-top: 8px;
 		max-height: min(72vh, 760px);
-		overflow: auto;
 		border: 1px solid rgba(255, 255, 255, 0.18);
 		border-radius: 8px;
-		background: rgba(3, 4, 14, 0.84);
-		backdrop-filter: blur(10px);
+		background: rgba(3, 4, 14, 0.34);
+		backdrop-filter: blur(4px);
 		padding: 10px;
 		display: grid;
+		grid-template-rows: auto 1fr;
 		gap: 8px;
 	}
 
@@ -849,12 +847,16 @@
 	.tunnel-control-row {
 		display: grid;
 		grid-template-columns: 1fr 76px;
-		gap: 8px;
+		gap: 32px;
 		align-items: center;
 	}
 
 	.tunnel-control input[type='range'] {
 		width: 100%;
+	}
+
+	.tunnel-controls-scroll {
+		overflow: auto;
 	}
 
 	.tunnel-number {
@@ -865,5 +867,8 @@
 		background: rgba(255, 255, 255, 0.08);
 		color: white;
 		padding: 4px 5px;
+		font-size: 12px;
+		font-weight: bold;
+		font-family: 'Courier New', Courier, monospace;
 	}
 </style>
