@@ -13,6 +13,7 @@
 		MathUtils,
 		Mesh,
 		PerspectiveCamera,
+		Points,
 		Scene,
 		ShaderMaterial,
 		WebGLRenderer
@@ -29,7 +30,10 @@
 	interface TunnelSlice {
 		mesh: Mesh<BufferGeometry, ShaderMaterial>;
 		ghostMesh: Mesh<BufferGeometry, ShaderMaterial>;
+		particleLayer: Points<BufferGeometry, ShaderMaterial>;
 		positions: Float32Array;
+		particlePositions: Float32Array;
+		particleSizes: Float32Array;
 		color: Color;
 		zRotation: number;
 		age: number;
@@ -99,7 +103,12 @@
 		bendDepthStrength: 1.25,
 		zRotationSpeed: 1.31,
 		emissionCurvePower: 1,
-		gradientCycleSpeed: 0.08
+		gradientCycleSpeed: 0.08,
+		sourceRenderMode: 0,
+		particleRadius: 0.7,
+		particleRadiusVariability: 0.9,
+		particleRandomness: 0.09,
+		particleOffset: 1.1
 	};
 
 	let tunnelConfig = $state({ ...initialTunnelConfig });
@@ -110,6 +119,13 @@
 	const tunnelSlices: TunnelSlice[] = [];
 
 	let isMobile = $derived(innerWidth < 560);
+	let renderMode = $derived(
+		tunnelConfig.sourceRenderMode === 0
+			? 'Curves'
+			: tunnelConfig.sourceRenderMode === 1
+				? 'Particles'
+				: 'Curves + Particles'
+	);
 
 	const tunnelVertexShader = `
 		attribute float aT;
@@ -176,6 +192,34 @@
 			color = mix(color, vec3(1.0), clamp(uPulse * 0.32 + centerGlow * 0.1, 0.0, 0.45));
 			float alpha = edge * fade * endFade * mix(0.16, 1.0, 1.0 - vAge);
 			gl_FragColor = vec4(color, alpha * uOpacity);
+		}
+	`;
+
+	const particleVertexShader = `
+		attribute float aSize;
+		uniform float uPixelRatio;
+		uniform float uAge;
+		varying float vAge;
+
+		void main() {
+			vAge = uAge;
+			vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+			gl_Position = projectionMatrix * mvPosition;
+			gl_PointSize = aSize * uPixelRatio * (180.0 / max(1.0, -mvPosition.z));
+		}
+	`;
+
+	const particleFragmentShader = `
+		uniform vec3 uColor;
+		uniform float uOpacity;
+		varying float vAge;
+
+		void main() {
+			vec2 uv = gl_PointCoord - 0.5;
+			float d = length(uv);
+			float circle = 1.0 - smoothstep(0.34, 0.5, d);
+			float fade = smoothstep(1.0, 0.03, vAge);
+			gl_FragColor = vec4(uColor, circle * fade * uOpacity);
 		}
 	`;
 
@@ -398,6 +442,37 @@
 		return { geometry, positions };
 	}
 
+	function createParticleGeometry() {
+		const count = tunnelConfig.segments;
+		const positions = new Float32Array(count * 3);
+		const sizes = new Float32Array(count);
+		const geometry = new BufferGeometry();
+		const positionAttribute = new BufferAttribute(positions, 3);
+		const sizeAttribute = new BufferAttribute(sizes, 1);
+		positionAttribute.setUsage(DynamicDrawUsage);
+		sizeAttribute.setUsage(DynamicDrawUsage);
+		geometry.setAttribute('position', positionAttribute);
+		geometry.setAttribute('aSize', sizeAttribute);
+		return { geometry, positions, sizes };
+	}
+
+	function createParticleMaterial() {
+		return new ShaderMaterial({
+			vertexShader: particleVertexShader,
+			fragmentShader: particleFragmentShader,
+			uniforms: {
+				uPixelRatio: { value: getPixelRatio() },
+				uAge: { value: 1 },
+				uColor: { value: new Color(0xffffff) },
+				uOpacity: { value: 1 }
+			},
+			transparent: true,
+			depthWrite: false,
+			depthTest: true,
+			blending: AdditiveBlending
+		});
+	}
+
 	function createTunnelMaterial(isGhost = false) {
 		const { a, b } = sampleGradientStops();
 		return new ShaderMaterial({
@@ -436,31 +511,48 @@
 		for (const slice of tunnelSlices) {
 			scene.remove(slice.mesh);
 			scene.remove(slice.ghostMesh);
+			scene.remove(slice.particleLayer);
 			slice.mesh.geometry.dispose();
 			slice.mesh.material.dispose();
 			slice.ghostMesh.material.dispose();
+			slice.particleLayer.geometry.dispose();
+			slice.particleLayer.material.dispose();
 		}
 		tunnelSlices.length = 0;
 		sliceCursor = 0;
 
 		for (let i = 0; i < tunnelConfig.slices; i++) {
 			const { geometry, positions } = createTunnelGeometry();
+			const {
+				geometry: particleGeometry,
+				positions: particlePositions,
+				sizes: particleSizes
+			} = createParticleGeometry();
 			const material = createTunnelMaterial();
 			const ghostMaterial = createTunnelMaterial(true);
+			const particleMaterial = createParticleMaterial();
 			const mesh = new Mesh(geometry, material);
 			const ghostMesh = new Mesh(geometry, ghostMaterial);
+			const particleLayer = new Points(particleGeometry, particleMaterial);
 			mesh.frustumCulled = false;
 			ghostMesh.frustumCulled = false;
+			particleLayer.frustumCulled = false;
 			mesh.visible = false;
 			ghostMesh.visible = false;
+			particleLayer.visible = false;
 			ghostMesh.renderOrder = -1;
 			mesh.renderOrder = 1;
+			particleLayer.renderOrder = 2;
 			scene.add(ghostMesh);
 			scene.add(mesh);
+			scene.add(particleLayer);
 			tunnelSlices.push({
 				mesh,
 				ghostMesh,
+				particleLayer,
 				positions,
+				particlePositions,
+				particleSizes,
 				color: new Color(0xffffff),
 				zRotation: 0,
 				age: 1,
@@ -492,19 +584,53 @@
 		slice.mesh.geometry.computeBoundingSphere();
 	}
 
+	function writeSliceParticles(slice: TunnelSlice) {
+		const ringRadius = getRingRadius();
+		const randomness = MathUtils.clamp(tunnelConfig.particleRandomness, 0, 1);
+		const sizeBase = Math.max(0, tunnelConfig.particleRadius);
+		const sizeVariance = Math.max(0, tunnelConfig.particleRadiusVariability);
+		for (let i = 0; i < tunnelConfig.segments; i++) {
+			const evenT = tunnelConfig.segments <= 1 ? 0 : i / tunnelConfig.segments;
+			const randomT = Math.random();
+			const t = MathUtils.lerp(evenT, randomT, randomness);
+			const waveIndex = Math.min(
+				tunnelConfig.segments,
+				Math.max(0, Math.round(t * tunnelConfig.segments))
+			);
+			const angle = t * Math.PI * 2;
+			const radius = ringRadius + smoothedWave[waveIndex] + tunnelConfig.particleOffset;
+			const offset = i * 3;
+			slice.particlePositions[offset] = Math.cos(angle) * radius;
+			slice.particlePositions[offset + 1] = Math.sin(angle) * radius;
+			slice.particlePositions[offset + 2] = 0;
+			slice.particleSizes[i] = Math.max(
+				0,
+				sizeBase + MathUtils.lerp(-sizeVariance, sizeVariance, Math.random())
+			);
+		}
+		slice.particleLayer.geometry.attributes.position.needsUpdate = true;
+		slice.particleLayer.geometry.attributes.aSize.needsUpdate = true;
+		slice.particleLayer.geometry.computeBoundingSphere();
+	}
+
 	function emitTunnelSlice() {
 		const slice = tunnelSlices[sliceCursor];
 		if (!slice) return;
 		writeSliceGeometry(slice);
+		writeSliceParticles(slice);
 		slice.color.copy(sampleTunnelGradient(timeSeconds * tunnelConfig.gradientCycleSpeed));
 		slice.zRotation = timeSeconds * tunnelConfig.zRotationSpeed;
 		slice.age = 0;
 		slice.active = true;
-		slice.mesh.visible = true;
+		slice.mesh.visible = tunnelConfig.sourceRenderMode === 0 || tunnelConfig.sourceRenderMode === 2;
+		slice.particleLayer.visible =
+			tunnelConfig.sourceRenderMode === 1 || tunnelConfig.sourceRenderMode === 2;
 		slice.ghostMesh.visible = tunnelConfig.ghostEnabled > 0;
 		slice.mesh.position.set(0, 0, tunnelConfig.nearZ);
+		slice.particleLayer.position.set(0, 0, tunnelConfig.nearZ);
 		slice.ghostMesh.position.set(0, 0, tunnelConfig.nearZ + tunnelConfig.ghostZOffset);
 		slice.mesh.rotation.set(0, 0, 0);
+		slice.particleLayer.rotation.set(0, 0, 0);
 		slice.ghostMesh.rotation.set(0, 0, 0);
 		sliceCursor = (sliceCursor + 1) % tunnelSlices.length;
 	}
@@ -520,6 +646,7 @@
 			if (slice.age >= 1) {
 				slice.active = false;
 				slice.mesh.visible = false;
+				slice.particleLayer.visible = false;
 				slice.ghostMesh.visible = false;
 				continue;
 			}
@@ -529,14 +656,25 @@
 			const z = tunnelConfig.nearZ - curvedAge * tunnelConfig.depth;
 			const scale = 0.84 + curvedAge * curvedAge * 4.9;
 			const bend = getBendOffset(age);
+			const sourceUsesCurves =
+				tunnelConfig.sourceRenderMode === 0 || tunnelConfig.sourceRenderMode === 2;
+			const sourceUsesParticles =
+				tunnelConfig.sourceRenderMode === 1 || tunnelConfig.sourceRenderMode === 2;
+			slice.mesh.visible = sourceUsesCurves;
+			slice.particleLayer.visible = sourceUsesParticles;
 			slice.mesh.position.x = bend.x;
 			slice.mesh.position.y = bend.y;
 			slice.mesh.position.z = z;
+			slice.particleLayer.position.x = bend.x;
+			slice.particleLayer.position.y = bend.y;
+			slice.particleLayer.position.z = z;
 			slice.mesh.scale.setScalar(scale);
+			slice.particleLayer.scale.setScalar(scale);
 			slice.mesh.rotation.z =
 				age * tunnelConfig.tunnelTwist +
 				slice.zRotation +
 				Math.sin(timeSeconds * 0.24 + age * 10) * 0.35;
+			slice.particleLayer.rotation.z = slice.mesh.rotation.z;
 			slice.ghostMesh.visible = tunnelConfig.ghostEnabled > 0;
 			slice.ghostMesh.position.x = bend.x;
 			slice.ghostMesh.position.y = bend.y;
@@ -554,6 +692,10 @@
 			slice.mesh.material.uniforms.uColorB.value.copy(slice.color);
 			slice.mesh.material.uniforms.uPulse.value = pulse;
 			slice.mesh.material.uniforms.uEndFade.value = tunnelConfig.curveEndFade;
+			slice.particleLayer.material.uniforms.uPixelRatio.value = getPixelRatio();
+			slice.particleLayer.material.uniforms.uAge.value = age;
+			slice.particleLayer.material.uniforms.uColor.value.copy(slice.color);
+			slice.particleLayer.material.uniforms.uOpacity.value = 1;
 			slice.ghostMesh.material.uniforms.uTime.value = timeSeconds;
 			slice.ghostMesh.material.uniforms.uAge.value = age;
 			slice.ghostMesh.material.uniforms.uMorphStrength.value = tunnelConfig.morphStrength;
@@ -713,6 +855,19 @@
 			<div class="tunnel-controls-scroll">
 				{@render rangeControl('Slices', 'slices', 12, 180, 1, true)}
 				{@render rangeControl('Segments', 'segments', 24, 360, 1, true)}
+				{@render rangeControl(`Mode: ${renderMode}`, 'sourceRenderMode', 0, 2, 1)}
+				{#if tunnelConfig.sourceRenderMode > 0}
+					{@render rangeControl('Particle radius', 'particleRadius', 0, 24, 0.1)}
+					{@render rangeControl(
+						'Particle radius variability',
+						'particleRadiusVariability',
+						0,
+						24,
+						0.1
+					)}
+					{@render rangeControl('Particle randomness', 'particleRandomness', 0, 1, 0.01)}
+					{@render rangeControl('Particle offset', 'particleOffset', -12, 12, 0.05)}
+				{/if}
 				{@render rangeControl('Emit gap', 'emitIntervalSeconds', 0.01, 0.25, 0.005)}
 				<div class="tunnel-readout">Animated gap {currentEmitInterval.toFixed(3)}s</div>
 				{@render rangeControl('Gap modulation width', 'gapModAmount', 0, 0.5, 0.005)}
