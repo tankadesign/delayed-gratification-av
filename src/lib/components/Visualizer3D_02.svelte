@@ -106,9 +106,11 @@
 		gradientCycleSpeed: 0.08,
 		sourceRenderMode: 0,
 		particleRadius: 0.7,
+		particleCount: 300,
 		particleRadiusVariability: 0.9,
 		particleRandomness: 0.09,
-		particleOffset: 1.1
+		particleOffset: 1.1,
+		particleMoveSpeed: 0
 	};
 
 	let tunnelConfig = $state({ ...initialTunnelConfig });
@@ -443,7 +445,7 @@
 	}
 
 	function createParticleGeometry() {
-		const count = tunnelConfig.segments;
+		const count = Math.max(0, Math.floor(tunnelConfig.particleCount));
 		const positions = new Float32Array(count * 3);
 		const sizes = new Float32Array(count);
 		const geometry = new BufferGeometry();
@@ -584,21 +586,26 @@
 		slice.mesh.geometry.computeBoundingSphere();
 	}
 
+	function sampleSmoothedWave(t: number) {
+		const wrapped = ((t % 1) + 1) % 1;
+		const scaled = wrapped * tunnelConfig.segments;
+		const index0 = Math.floor(scaled);
+		const index1 = (index0 + 1) % tunnelConfig.segments;
+		return MathUtils.lerp(smoothedWave[index0], smoothedWave[index1], scaled - index0);
+	}
+
 	function writeSliceParticles(slice: TunnelSlice) {
 		const ringRadius = getRingRadius();
 		const randomness = MathUtils.clamp(tunnelConfig.particleRandomness, 0, 1);
 		const sizeBase = Math.max(0, tunnelConfig.particleRadius);
 		const sizeVariance = Math.max(0, tunnelConfig.particleRadiusVariability);
-		for (let i = 0; i < tunnelConfig.segments; i++) {
-			const evenT = tunnelConfig.segments <= 1 ? 0 : i / tunnelConfig.segments;
+		const particleCount = Math.max(0, Math.floor(tunnelConfig.particleCount));
+		for (let i = 0; i < particleCount; i++) {
+			const evenT = particleCount <= 1 ? 0 : i / particleCount;
 			const randomT = Math.random();
 			const t = MathUtils.lerp(evenT, randomT, randomness);
-			const waveIndex = Math.min(
-				tunnelConfig.segments,
-				Math.max(0, Math.round(t * tunnelConfig.segments))
-			);
 			const angle = t * Math.PI * 2;
-			const radius = ringRadius + smoothedWave[waveIndex] + tunnelConfig.particleOffset;
+			const radius = ringRadius + sampleSmoothedWave(t) + tunnelConfig.particleOffset;
 			const offset = i * 3;
 			slice.particlePositions[offset] = Math.cos(angle) * radius;
 			slice.particlePositions[offset + 1] = Math.sin(angle) * radius;
@@ -667,7 +674,8 @@
 			slice.mesh.position.z = z;
 			slice.particleLayer.position.x = bend.x;
 			slice.particleLayer.position.y = bend.y;
-			slice.particleLayer.position.z = z;
+			slice.particleLayer.position.z =
+				z + tunnelConfig.particleMoveSpeed * age * tunnelConfig.lifetimeSeconds;
 			slice.mesh.scale.setScalar(scale);
 			slice.particleLayer.scale.setScalar(scale);
 			slice.mesh.rotation.z =
@@ -857,6 +865,7 @@
 				{@render rangeControl('Segments', 'segments', 24, 360, 1, true)}
 				{@render rangeControl(`Mode: ${renderMode}`, 'sourceRenderMode', 0, 2, 1)}
 				{#if tunnelConfig.sourceRenderMode > 0}
+					{@render rangeControl('Particle count', 'particleCount', 0, 600, 1, true)}
 					{@render rangeControl('Particle radius', 'particleRadius', 0, 24, 0.1)}
 					{@render rangeControl(
 						'Particle radius variability',
@@ -867,6 +876,7 @@
 					)}
 					{@render rangeControl('Particle randomness', 'particleRandomness', 0, 1, 0.01)}
 					{@render rangeControl('Particle offset', 'particleOffset', -12, 12, 0.05)}
+					{@render rangeControl('Particle move speed', 'particleMoveSpeed', -5, 5, 0.05)}
 				{/if}
 				{@render rangeControl('Emit gap', 'emitIntervalSeconds', 0.01, 0.25, 0.005)}
 				<div class="tunnel-readout">Animated gap {currentEmitInterval.toFixed(3)}s</div>
